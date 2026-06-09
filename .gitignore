@@ -67,3 +67,11 @@ vcpkg_installed/
 # test output & cache
 Testing/
 .cache/
+
+build/
+installed-driver/
+.vs/
+out/
+*.user
+*.suo
+*.log
