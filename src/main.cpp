@@ -1,82 +1,278 @@
 #include <RtAudio.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
 #include <conio.h>
+#include <cstddef>
+#include <cstdlib>
 #include <iostream>
+#include <stdexcept>
+#include <string>
 #include <thread>
 #include <vector>
-#include <algorithm>
+
+struct Config
+{
+    unsigned int asioDeviceId = 130;
+    unsigned int wasapiDeviceId = 131;
+    unsigned int inputChannel = 2; // 1-based user-facing channel.
+    unsigned int sampleRate = 48000;
+    unsigned int bufferFrames = 128;
+    unsigned int prebufferMs = 5;
+    float gain = 1.0f;
+    std::size_t ringSamples = 8192;
+};
+
+static void printHelp()
+{
+    std::cout
+        << "ASIO2WASAPI Monitor\n\n"
+        << "Usage:\n"
+        << "  asio2wasapi-monitor.exe [options]\n\n"
+        << "Options:\n"
+        << "  --asio <id>          ASIO input device id. Default: 130\n"
+        << "  --wasapi <id>        WASAPI output device id. Default: 131\n"
+        << "  --channel <n>        ASIO input channel, 1-based. Default: 2\n"
+        << "  --rate <hz>          Sample rate. Default: 48000\n"
+        << "  --buffer <frames>    Buffer size. Default: 128\n"
+        << "  --prebuffer <ms>     Prebuffer before output starts. Default: 5\n"
+        << "  --gain <value>       Output gain. Default: 1.0\n"
+        << "  --ring <samples>     Ring buffer size in samples. Default: 8192\n"
+        << "  --help               Show this help.\n\n"
+        << "Example:\n"
+        << "  asio2wasapi-monitor.exe --asio 130 --wasapi 131 --channel 2 --buffer 64 --prebuffer 5 --gain 1.0\n";
+}
+
+static unsigned int parseUInt(const std::string& value, const std::string& name)
+{
+    try
+    {
+        const unsigned long parsed = std::stoul(value);
+        if (parsed == 0)
+            throw std::runtime_error(name + " must be greater than zero.");
+
+        return static_cast<unsigned int>(parsed);
+    }
+    catch (...)
+    {
+        throw std::runtime_error("Invalid value for " + name + ": " + value);
+    }
+}
+
+static unsigned int parseUIntAllowZero(const std::string& value, const std::string& name)
+{
+    try
+    {
+        const unsigned long parsed = std::stoul(value);
+        return static_cast<unsigned int>(parsed);
+    }
+    catch (...)
+    {
+        throw std::runtime_error("Invalid value for " + name + ": " + value);
+    }
+}
+
+static float parseFloat(const std::string& value, const std::string& name)
+{
+    try
+    {
+        return std::stof(value);
+    }
+    catch (...)
+    {
+        throw std::runtime_error("Invalid value for " + name + ": " + value);
+    }
+}
+
+static std::size_t nextPowerOfTwo(std::size_t value)
+{
+    if (value < 2)
+        return 2;
+
+    --value;
+
+    for (std::size_t shift = 1; shift < sizeof(std::size_t) * 8; shift <<= 1)
+        value |= value >> shift;
+
+    return value + 1;
+}
+
+static Config parseArgs(int argc, char** argv)
+{
+    Config config;
+
+    for (int i = 1; i < argc; ++i)
+    {
+        const std::string arg = argv[i];
+
+        auto requireValue = [&](const std::string& option) -> std::string
+        {
+            if (i + 1 >= argc)
+                throw std::runtime_error("Missing value for " + option);
+
+            return argv[++i];
+        };
+
+        if (arg == "--help" || arg == "-h")
+        {
+            printHelp();
+            std::exit(0);
+        }
+        else if (arg == "--asio")
+        {
+            config.asioDeviceId = parseUInt(requireValue(arg), arg);
+        }
+        else if (arg == "--wasapi")
+        {
+            config.wasapiDeviceId = parseUInt(requireValue(arg), arg);
+        }
+        else if (arg == "--channel")
+        {
+            config.inputChannel = parseUInt(requireValue(arg), arg);
+        }
+        else if (arg == "--rate")
+        {
+            config.sampleRate = parseUInt(requireValue(arg), arg);
+        }
+        else if (arg == "--buffer")
+        {
+            config.bufferFrames = parseUInt(requireValue(arg), arg);
+        }
+        else if (arg == "--prebuffer")
+        {
+            config.prebufferMs = parseUIntAllowZero(requireValue(arg), arg);
+        }
+        else if (arg == "--gain")
+        {
+            config.gain = parseFloat(requireValue(arg), arg);
+        }
+        else if (arg == "--ring")
+        {
+            config.ringSamples = parseUInt(requireValue(arg), arg);
+        }
+        else
+        {
+            throw std::runtime_error("Unknown argument: " + arg);
+        }
+    }
+
+    config.ringSamples = nextPowerOfTwo(config.ringSamples);
+
+    if (config.gain < 0.0f)
+        throw std::runtime_error("--gain cannot be negative.");
+
+    return config;
+}
 
 class MonoRingBuffer
 {
 public:
-    explicit MonoRingBuffer(size_t capacityPowerOfTwo)
+    explicit MonoRingBuffer(std::size_t capacityPowerOfTwo)
         : buffer_(capacityPowerOfTwo), mask_(capacityPowerOfTwo - 1)
     {
         if ((capacityPowerOfTwo & (capacityPowerOfTwo - 1)) != 0)
             throw std::runtime_error("Ring buffer capacity must be a power of two.");
     }
 
-    size_t write(const float* input, size_t count)
+    bool writeOne(float sample)
     {
-        const size_t read = readIndex_.load(std::memory_order_acquire);
-        const size_t write = writeIndex_.load(std::memory_order_relaxed);
+        const std::size_t read = readIndex_.load(std::memory_order_acquire);
+        const std::size_t write = writeIndex_.load(std::memory_order_relaxed);
 
-        const size_t used = write - read;
-        const size_t freeSpace = buffer_.size() - used;
-        const size_t toWrite = std::min(count, freeSpace);
+        if ((write - read) >= buffer_.size())
+            return false;
 
-        for (size_t i = 0; i < toWrite; ++i)
-            buffer_[(write + i) & mask_] = input[i];
-
-        writeIndex_.store(write + toWrite, std::memory_order_release);
-        return toWrite;
+        buffer_[write & mask_] = sample;
+        writeIndex_.store(write + 1, std::memory_order_release);
+        return true;
     }
 
-    size_t read(float* output, size_t count)
+    bool readOne(float& sample)
     {
-        const size_t write = writeIndex_.load(std::memory_order_acquire);
-        const size_t read = readIndex_.load(std::memory_order_relaxed);
+        const std::size_t write = writeIndex_.load(std::memory_order_acquire);
+        const std::size_t read = readIndex_.load(std::memory_order_relaxed);
 
-        const size_t available = write - read;
-        const size_t toRead = std::min(count, available);
+        if (write == read)
+            return false;
 
-        for (size_t i = 0; i < toRead; ++i)
-            output[i] = buffer_[(read + i) & mask_];
-
-        readIndex_.store(read + toRead, std::memory_order_release);
-        return toRead;
+        sample = buffer_[read & mask_];
+        readIndex_.store(read + 1, std::memory_order_release);
+        return true;
     }
 
-    size_t available() const
+    std::size_t available() const
     {
-        const size_t write = writeIndex_.load(std::memory_order_acquire);
-        const size_t read = readIndex_.load(std::memory_order_acquire);
+        const std::size_t write = writeIndex_.load(std::memory_order_acquire);
+        const std::size_t read = readIndex_.load(std::memory_order_acquire);
         return write - read;
     }
 
 private:
     std::vector<float> buffer_;
-    size_t mask_;
+    std::size_t mask_;
 
-    std::atomic<size_t> readIndex_{0};
-    std::atomic<size_t> writeIndex_{0};
+    std::atomic<std::size_t> readIndex_{0};
+    std::atomic<std::size_t> writeIndex_{0};
 };
 
 struct BridgeState
 {
-    MonoRingBuffer ring{8192};
+    explicit BridgeState(const Config& cfg)
+        : config(cfg), ring(cfg.ringSamples)
+    {
+    }
+
+    Config config;
+    MonoRingBuffer ring;
 
     std::atomic<float> inputPeak{0.0f};
     std::atomic<unsigned long long> inputCallbacks{0};
     std::atomic<unsigned long long> outputCallbacks{0};
     std::atomic<unsigned long long> underruns{0};
     std::atomic<unsigned long long> overruns{0};
-
-    float gain = 1.0f;
 };
+
+static std::size_t calculatePrebufferSamples(const Config& config)
+{
+    if (config.prebufferMs == 0)
+        return 0;
+
+    const auto samplesFromMs =
+        static_cast<std::size_t>(
+            (static_cast<unsigned long long>(config.sampleRate) * config.prebufferMs) / 1000
+        );
+
+    return std::max<std::size_t>(samplesFromMs, config.bufferFrames);
+}
+
+static void waitForPrebuffer(BridgeState& state)
+{
+    const std::size_t targetSamples = calculatePrebufferSamples(state.config);
+
+    if (targetSamples == 0)
+        return;
+
+    std::cout << "Waiting for prebuffer: " << targetSamples << " samples...\n";
+
+    const auto start = std::chrono::steady_clock::now();
+
+    while (state.ring.available() < targetSamples)
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+
+        const auto elapsed = std::chrono::steady_clock::now() - start;
+
+        if (elapsed > std::chrono::milliseconds(1000))
+        {
+            std::cout << "Warning: prebuffer timeout. Starting output anyway.\n";
+            break;
+        }
+    }
+
+    std::cout << "Prebuffer ready: " << state.ring.available() << " samples.\n";
+}
 
 static int asioInputCallback(
     void* outputBuffer,
@@ -99,26 +295,20 @@ static int asioInputCallback(
 
     const auto* input = static_cast<const float*>(inputBuffer);
 
-    std::vector<float> mono(nFrames);
+    const unsigned int requestedChannels = state->config.inputChannel;
+    const unsigned int selectedIndex = state->config.inputChannel - 1;
 
     float peak = 0.0f;
 
     for (unsigned int i = 0; i < nFrames; ++i)
     {
-        // Scarlett ASIO input 2.
-        const float sample = input[i * 2 + 1];
+        const float sample = input[i * requestedChannels + selectedIndex];
 
-        mono[i] = sample;
+        if (!state->ring.writeOne(sample))
+            state->overruns.fetch_add(1, std::memory_order_relaxed);
 
-        const float absSample = std::fabs(sample);
-        if (absSample > peak)
-            peak = absSample;
+        peak = std::max(peak, std::fabs(sample));
     }
-
-    const size_t written = state->ring.write(mono.data(), nFrames);
-
-    if (written < nFrames)
-        state->overruns.fetch_add(1, std::memory_order_relaxed);
 
     state->inputPeak.store(peak, std::memory_order_relaxed);
     state->inputCallbacks.fetch_add(1, std::memory_order_relaxed);
@@ -144,20 +334,15 @@ static int wasapiOutputCallback(
 
     auto* output = static_cast<float*>(outputBuffer);
 
-    std::vector<float> mono(nFrames);
-    const size_t read = state->ring.read(mono.data(), nFrames);
-
-    if (read < nFrames)
-        state->underruns.fetch_add(1, std::memory_order_relaxed);
-
     for (unsigned int i = 0; i < nFrames; ++i)
     {
         float sample = 0.0f;
 
-        if (i < read)
-            sample = mono[i] * state->gain;
+        if (!state->ring.readOne(sample))
+            state->underruns.fetch_add(1, std::memory_order_relaxed);
 
-        // Mono guitar to stereo headphones.
+        sample *= state->config.gain;
+
         output[i * 2 + 0] = sample;
         output[i * 2 + 1] = sample;
     }
@@ -167,36 +352,35 @@ static int wasapiOutputCallback(
     return 0;
 }
 
-int main()
+int main(int argc, char** argv)
 {
-    constexpr unsigned int asioInputDeviceId = 130;    // Focusrite USB ASIO
-    constexpr unsigned int wasapiOutputDeviceId = 131; // Headphones (3- Arctis 7+)
-
-    constexpr unsigned int sampleRate = 48000;
-    unsigned int bufferFrames = 128;
-
-    std::cout << "ASIO2WASAPI Monitor - Bridge MVP\n\n";
-    std::cout << "ASIO input device:   " << asioInputDeviceId << " Focusrite USB ASIO\n";
-    std::cout << "ASIO input channel:  2\n";
-    std::cout << "WASAPI output device:" << wasapiOutputDeviceId << " Arctis 7+\n";
-    std::cout << "Sample rate:         " << sampleRate << "\n";
-    std::cout << "Buffer frames:       " << bufferFrames << "\n";
-    std::cout << "Press Q to quit.\n\n";
-
-    BridgeState state;
-
     try
     {
+        const Config config = parseArgs(argc, argv);
+
+        std::cout << "ASIO2WASAPI Monitor - Bridge MVP\n\n";
+        std::cout << "ASIO input device:    " << config.asioDeviceId << "\n";
+        std::cout << "ASIO input channel:   " << config.inputChannel << "\n";
+        std::cout << "WASAPI output device: " << config.wasapiDeviceId << "\n";
+        std::cout << "Sample rate:          " << config.sampleRate << "\n";
+        std::cout << "Buffer frames:        " << config.bufferFrames << "\n";
+        std::cout << "Prebuffer:            " << config.prebufferMs << " ms\n";
+        std::cout << "Gain:                 " << config.gain << "\n";
+        std::cout << "Ring samples:         " << config.ringSamples << "\n";
+        std::cout << "Press Q to quit.\n\n";
+
+        BridgeState state(config);
+
         RtAudio asioInput(RtAudio::WINDOWS_ASIO);
         RtAudio wasapiOutput(RtAudio::WINDOWS_WASAPI);
 
         RtAudio::StreamParameters inputParams;
-        inputParams.deviceId = asioInputDeviceId;
-        inputParams.nChannels = 2;
+        inputParams.deviceId = config.asioDeviceId;
+        inputParams.nChannels = config.inputChannel;
         inputParams.firstChannel = 0;
 
         RtAudio::StreamParameters outputParams;
-        outputParams.deviceId = wasapiOutputDeviceId;
+        outputParams.deviceId = config.wasapiDeviceId;
         outputParams.nChannels = 2;
         outputParams.firstChannel = 0;
 
@@ -208,24 +392,26 @@ int main()
         outputOptions.flags = RTAUDIO_MINIMIZE_LATENCY;
         outputOptions.streamName = "ASIO2WASAPI WASAPI Output";
 
+        unsigned int inputBufferFrames = config.bufferFrames;
+
         asioInput.openStream(
             nullptr,
             &inputParams,
             RTAUDIO_FLOAT32,
-            sampleRate,
-            &bufferFrames,
+            config.sampleRate,
+            &inputBufferFrames,
             &asioInputCallback,
             &state,
             &inputOptions
         );
 
-        unsigned int outputBufferFrames = bufferFrames;
+        unsigned int outputBufferFrames = config.bufferFrames;
 
         wasapiOutput.openStream(
             &outputParams,
             nullptr,
             RTAUDIO_FLOAT32,
-            sampleRate,
+            config.sampleRate,
             &outputBufferFrames,
             &wasapiOutputCallback,
             &state,
@@ -234,8 +420,7 @@ int main()
 
         asioInput.startStream();
 
-        // Small pre-buffer so output does not start completely empty.
-        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        waitForPrebuffer(state);
 
         wasapiOutput.startStream();
 
@@ -273,13 +458,13 @@ int main()
 
         if (asioInput.isStreamOpen())
             asioInput.closeStream();
+
+        std::cout << "Done.\n";
+        return 0;
     }
     catch (const std::exception& e)
     {
         std::cerr << "\nError: " << e.what() << "\n";
         return 1;
     }
-
-    std::cout << "Done.\n";
-    return 0;
 }
