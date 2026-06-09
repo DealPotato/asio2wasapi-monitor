@@ -61,6 +61,19 @@ static unsigned int parseUInt(const std::string& value, const std::string& name)
     }
 }
 
+static unsigned int parseUIntAllowZero(const std::string& value, const std::string& name)
+{
+    try
+    {
+        const unsigned long parsed = std::stoul(value);
+        return static_cast<unsigned int>(parsed);
+    }
+    catch (...)
+    {
+        throw std::runtime_error("Invalid value for " + name + ": " + value);
+    }
+}
+
 static float parseFloat(const std::string& value, const std::string& name)
 {
     try
@@ -129,7 +142,7 @@ static Config parseArgs(int argc, char** argv)
         }
         else if (arg == "--prebuffer")
         {
-            config.prebufferMs = parseUInt(requireValue(arg), arg);
+            config.prebufferMs = parseUIntAllowZero(requireValue(arg), arg);
         }
         else if (arg == "--gain")
         {
@@ -220,6 +233,46 @@ struct BridgeState
     std::atomic<unsigned long long> underruns{0};
     std::atomic<unsigned long long> overruns{0};
 };
+
+static std::size_t calculatePrebufferSamples(const Config& config)
+{
+    if (config.prebufferMs == 0)
+        return 0;
+
+    const auto samplesFromMs =
+        static_cast<std::size_t>(
+            (static_cast<unsigned long long>(config.sampleRate) * config.prebufferMs) / 1000
+        );
+
+    return std::max<std::size_t>(samplesFromMs, config.bufferFrames);
+}
+
+static void waitForPrebuffer(BridgeState& state)
+{
+    const std::size_t targetSamples = calculatePrebufferSamples(state.config);
+
+    if (targetSamples == 0)
+        return;
+
+    std::cout << "Waiting for prebuffer: " << targetSamples << " samples...\n";
+
+    const auto start = std::chrono::steady_clock::now();
+
+    while (state.ring.available() < targetSamples)
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+
+        const auto elapsed = std::chrono::steady_clock::now() - start;
+
+        if (elapsed > std::chrono::milliseconds(1000))
+        {
+            std::cout << "Warning: prebuffer timeout. Starting output anyway.\n";
+            break;
+        }
+    }
+
+    std::cout << "Prebuffer ready: " << state.ring.available() << " samples.\n";
+}
 
 static int asioInputCallback(
     void* outputBuffer,
@@ -367,8 +420,7 @@ int main(int argc, char** argv)
 
         asioInput.startStream();
 
-        if (config.prebufferMs > 0)
-            std::this_thread::sleep_for(std::chrono::milliseconds(config.prebufferMs));
+        waitForPrebuffer(state);
 
         wasapiOutput.startStream();
 
