@@ -1,102 +1,164 @@
-#include <algorithm>
-#include <iostream>
-#include <string>
-#include <vector>
-
 #include <RtAudio.h>
 
-static bool containsApi(const std::vector<RtAudio::Api>& apis, RtAudio::Api api)
+#include <atomic>
+#include <chrono>
+#include <cmath>
+#include <conio.h>
+#include <iomanip>
+#include <iostream>
+#include <thread>
+
+struct MeterState
 {
-    return std::find(apis.begin(), apis.end(), api) != apis.end();
+    std::atomic<float> peakCh1{0.0f};
+    std::atomic<float> peakCh2{0.0f};
+    std::atomic<float> rmsCh1{0.0f};
+    std::atomic<float> rmsCh2{0.0f};
+    std::atomic<unsigned long long> callbacks{0};
+};
+
+static int inputCallback(
+    void* outputBuffer,
+    void* inputBuffer,
+    unsigned int nFrames,
+    double streamTime,
+    RtAudioStreamStatus status,
+    void* userData)
+{
+    (void)outputBuffer;
+    (void)streamTime;
+
+    auto* state = static_cast<MeterState*>(userData);
+
+    if (status)
+        std::cerr << "Stream status warning: " << status << "\n";
+
+    if (!inputBuffer)
+        return 0;
+
+    const auto* input = static_cast<const float*>(inputBuffer);
+
+    float peak1 = 0.0f;
+    float peak2 = 0.0f;
+    double sum1 = 0.0;
+    double sum2 = 0.0;
+
+    for (unsigned int i = 0; i < nFrames; ++i)
+    {
+        const float ch1 = input[i * 2 + 0];
+        const float ch2 = input[i * 2 + 1];
+
+        peak1 = std::max(peak1, std::fabs(ch1));
+        peak2 = std::max(peak2, std::fabs(ch2));
+
+        sum1 += static_cast<double>(ch1) * ch1;
+        sum2 += static_cast<double>(ch2) * ch2;
+    }
+
+    state->peakCh1.store(peak1, std::memory_order_relaxed);
+    state->peakCh2.store(peak2, std::memory_order_relaxed);
+    state->rmsCh1.store(static_cast<float>(std::sqrt(sum1 / nFrames)), std::memory_order_relaxed);
+    state->rmsCh2.store(static_cast<float>(std::sqrt(sum2 / nFrames)), std::memory_order_relaxed);
+    state->callbacks.fetch_add(1, std::memory_order_relaxed);
+
+    return 0;
 }
 
-static void printSampleRates(const std::vector<unsigned int>& rates)
+static void printBar(const char* label, float peak, float rms)
 {
-    if (rates.empty())
-    {
-        std::cout << "none reported";
-        return;
-    }
+    constexpr int width = 30;
 
-    for (size_t i = 0; i < rates.size(); ++i)
-    {
-        std::cout << rates[i];
-        if (i + 1 < rates.size())
-            std::cout << ", ";
-    }
-}
+    const int peakBars = static_cast<int>(std::min(peak * width * 4.0f, static_cast<float>(width)));
 
-static void printDevicesForApi(RtAudio::Api api)
-{
-    std::cout << "\n============================================================\n";
-    std::cout << RtAudio::getApiDisplayName(api)
-              << " (" << RtAudio::getApiName(api) << ")\n";
-    std::cout << "============================================================\n";
+    std::cout << label << " [";
 
-    RtAudio audio(api);
+    for (int i = 0; i < width; ++i)
+        std::cout << (i < peakBars ? "#" : " ");
 
-    const auto deviceIds = audio.getDeviceIds();
+    std::cout << "] ";
 
-    if (deviceIds.empty())
-    {
-        std::cout << "No devices found for this API.\n";
-        return;
-    }
-
-    for (const auto deviceId : deviceIds)
-    {
-        const auto info = audio.getDeviceInfo(deviceId);
-
-        std::cout << "\n[" << deviceId << "] " << info.name << "\n";
-        std::cout << "    Inputs:  " << info.inputChannels << "\n";
-        std::cout << "    Outputs: " << info.outputChannels << "\n";
-        std::cout << "    Duplex:  " << info.duplexChannels << "\n";
-
-        std::cout << "    Default input:  "
-                  << (info.isDefaultInput ? "yes" : "no") << "\n";
-
-        std::cout << "    Default output: "
-                  << (info.isDefaultOutput ? "yes" : "no") << "\n";
-
-        std::cout << "    Current sample rate:   "
-                  << info.currentSampleRate << "\n";
-
-        std::cout << "    Preferred sample rate: "
-                  << info.preferredSampleRate << "\n";
-
-        std::cout << "    Supported sample rates: ";
-        printSampleRates(info.sampleRates);
-        std::cout << "\n";
-    }
+    std::cout << "peak=" << std::fixed << std::setprecision(5) << peak
+              << " rms=" << std::fixed << std::setprecision(5) << rms
+              << "\n";
 }
 
 int main()
 {
-    std::cout << "ASIO2WASAPI Monitor - Device Probe\n";
+    constexpr unsigned int focusriteAsioDeviceId = 130;
+    constexpr unsigned int sampleRate = 48000;
+    unsigned int bufferFrames = 128;
 
-    std::vector<RtAudio::Api> compiledApis;
-    RtAudio::getCompiledApi(compiledApis);
+    std::cout << "ASIO2WASAPI Monitor - ASIO Input Meter\n";
+    std::cout << "Device: Focusrite USB ASIO [" << focusriteAsioDeviceId << "]\n";
+    std::cout << "Sample rate: " << sampleRate << "\n";
+    std::cout << "Buffer frames: " << bufferFrames << "\n";
+    std::cout << "Reading input channels 1 and 2\n";
+    std::cout << "Press Q to quit.\n\n";
 
-    std::cout << "\nCompiled APIs:\n";
-    for (const auto api : compiledApis)
+    MeterState meter;
+
+    try
     {
-        std::cout << "  - " << RtAudio::getApiDisplayName(api)
-                  << " (" << RtAudio::getApiName(api) << ")\n";
+        RtAudio audio(RtAudio::WINDOWS_ASIO);
+
+        RtAudio::StreamParameters inputParams;
+        inputParams.deviceId = focusriteAsioDeviceId;
+        inputParams.nChannels = 2;
+        inputParams.firstChannel = 0;
+
+        RtAudio::StreamOptions options;
+        options.flags = RTAUDIO_MINIMIZE_LATENCY;
+        options.streamName = "ASIO2WASAPI Input Meter";
+
+        audio.openStream(
+            nullptr,
+            &inputParams,
+            RTAUDIO_FLOAT32,
+            sampleRate,
+            &bufferFrames,
+            &inputCallback,
+            &meter,
+            &options
+        );
+
+        audio.startStream();
+
+        while (true)
+        {
+            std::cout << "\x1b[2J\x1b[H";
+
+            std::cout << "ASIO2WASAPI Monitor - ASIO Input Meter\n\n";
+
+            printBar("Input 1", meter.peakCh1.load(std::memory_order_relaxed),
+                               meter.rmsCh1.load(std::memory_order_relaxed));
+
+            printBar("Input 2", meter.peakCh2.load(std::memory_order_relaxed),
+                               meter.rmsCh2.load(std::memory_order_relaxed));
+
+            std::cout << "\nCallbacks: " << meter.callbacks.load(std::memory_order_relaxed) << "\n";
+            std::cout << "Press Q to quit.\n";
+
+            if (_kbhit())
+            {
+                const int key = _getch();
+                if (key == 'q' || key == 'Q')
+                    break;
+            }
+
+            std::this_thread::sleep_for(std::chrono::milliseconds(80));
+        }
+
+        if (audio.isStreamRunning())
+            audio.stopStream();
+
+        if (audio.isStreamOpen())
+            audio.closeStream();
+    }
+    catch (const std::exception& e)
+    {
+        std::cerr << "\nError: " << e.what() << "\n";
+        return 1;
     }
 
-    const bool hasAsio = containsApi(compiledApis, RtAudio::WINDOWS_ASIO);
-    const bool hasWasapi = containsApi(compiledApis, RtAudio::WINDOWS_WASAPI);
-
-    std::cout << "\nRequired backends:\n";
-    std::cout << "  ASIO:   " << (hasAsio ? "available" : "missing") << "\n";
-    std::cout << "  WASAPI: " << (hasWasapi ? "available" : "missing") << "\n";
-
-    if (hasAsio)
-        printDevicesForApi(RtAudio::WINDOWS_ASIO);
-
-    if (hasWasapi)
-        printDevicesForApi(RtAudio::WINDOWS_WASAPI);
-
-    std::cout << "\nProbe complete.\n";
     return 0;
 }
