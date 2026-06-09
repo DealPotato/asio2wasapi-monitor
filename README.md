@@ -3,7 +3,7 @@
 ASIO2WASAPI Monitor is an open-source Windows audio utility that routes low-latency ASIO input to a WASAPI output device.
 
 The initial use case is direct guitar monitoring:
-
+```text
 Guitar → Audio Interface ASIO Input → ASIO2WASAPI Monitor → WASAPI Headphones
 
 This allows an ASIO audio interface input, such as a Focusrite Scarlett guitar input, to be monitored through a separate Windows audio output device, such as USB or wireless headphones.
