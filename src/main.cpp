@@ -4,20 +4,81 @@
 #include <chrono>
 #include <cmath>
 #include <conio.h>
-#include <iomanip>
 #include <iostream>
 #include <thread>
+#include <vector>
+#include <algorithm>
 
-struct MeterState
+class MonoRingBuffer
 {
-    std::atomic<float> peakCh1{0.0f};
-    std::atomic<float> peakCh2{0.0f};
-    std::atomic<float> rmsCh1{0.0f};
-    std::atomic<float> rmsCh2{0.0f};
-    std::atomic<unsigned long long> callbacks{0};
+public:
+    explicit MonoRingBuffer(size_t capacityPowerOfTwo)
+        : buffer_(capacityPowerOfTwo), mask_(capacityPowerOfTwo - 1)
+    {
+        if ((capacityPowerOfTwo & (capacityPowerOfTwo - 1)) != 0)
+            throw std::runtime_error("Ring buffer capacity must be a power of two.");
+    }
+
+    size_t write(const float* input, size_t count)
+    {
+        const size_t read = readIndex_.load(std::memory_order_acquire);
+        const size_t write = writeIndex_.load(std::memory_order_relaxed);
+
+        const size_t used = write - read;
+        const size_t freeSpace = buffer_.size() - used;
+        const size_t toWrite = std::min(count, freeSpace);
+
+        for (size_t i = 0; i < toWrite; ++i)
+            buffer_[(write + i) & mask_] = input[i];
+
+        writeIndex_.store(write + toWrite, std::memory_order_release);
+        return toWrite;
+    }
+
+    size_t read(float* output, size_t count)
+    {
+        const size_t write = writeIndex_.load(std::memory_order_acquire);
+        const size_t read = readIndex_.load(std::memory_order_relaxed);
+
+        const size_t available = write - read;
+        const size_t toRead = std::min(count, available);
+
+        for (size_t i = 0; i < toRead; ++i)
+            output[i] = buffer_[(read + i) & mask_];
+
+        readIndex_.store(read + toRead, std::memory_order_release);
+        return toRead;
+    }
+
+    size_t available() const
+    {
+        const size_t write = writeIndex_.load(std::memory_order_acquire);
+        const size_t read = readIndex_.load(std::memory_order_acquire);
+        return write - read;
+    }
+
+private:
+    std::vector<float> buffer_;
+    size_t mask_;
+
+    std::atomic<size_t> readIndex_{0};
+    std::atomic<size_t> writeIndex_{0};
 };
 
-static int inputCallback(
+struct BridgeState
+{
+    MonoRingBuffer ring{8192};
+
+    std::atomic<float> inputPeak{0.0f};
+    std::atomic<unsigned long long> inputCallbacks{0};
+    std::atomic<unsigned long long> outputCallbacks{0};
+    std::atomic<unsigned long long> underruns{0};
+    std::atomic<unsigned long long> overruns{0};
+
+    float gain = 1.0f;
+};
+
+static int asioInputCallback(
     void* outputBuffer,
     void* inputBuffer,
     unsigned int nFrames,
@@ -28,115 +89,168 @@ static int inputCallback(
     (void)outputBuffer;
     (void)streamTime;
 
-    auto* state = static_cast<MeterState*>(userData);
+    auto* state = static_cast<BridgeState*>(userData);
 
     if (status)
-        std::cerr << "Stream status warning: " << status << "\n";
+        state->underruns.fetch_add(1, std::memory_order_relaxed);
 
     if (!inputBuffer)
         return 0;
 
     const auto* input = static_cast<const float*>(inputBuffer);
 
-    float peak1 = 0.0f;
-    float peak2 = 0.0f;
-    double sum1 = 0.0;
-    double sum2 = 0.0;
+    std::vector<float> mono(nFrames);
+
+    float peak = 0.0f;
 
     for (unsigned int i = 0; i < nFrames; ++i)
     {
-        const float ch1 = input[i * 2 + 0];
-        const float ch2 = input[i * 2 + 1];
+        // Scarlett ASIO input 2.
+        const float sample = input[i * 2 + 1];
 
-        peak1 = std::max(peak1, std::fabs(ch1));
-        peak2 = std::max(peak2, std::fabs(ch2));
+        mono[i] = sample;
 
-        sum1 += static_cast<double>(ch1) * ch1;
-        sum2 += static_cast<double>(ch2) * ch2;
+        const float absSample = std::fabs(sample);
+        if (absSample > peak)
+            peak = absSample;
     }
 
-    state->peakCh1.store(peak1, std::memory_order_relaxed);
-    state->peakCh2.store(peak2, std::memory_order_relaxed);
-    state->rmsCh1.store(static_cast<float>(std::sqrt(sum1 / nFrames)), std::memory_order_relaxed);
-    state->rmsCh2.store(static_cast<float>(std::sqrt(sum2 / nFrames)), std::memory_order_relaxed);
-    state->callbacks.fetch_add(1, std::memory_order_relaxed);
+    const size_t written = state->ring.write(mono.data(), nFrames);
+
+    if (written < nFrames)
+        state->overruns.fetch_add(1, std::memory_order_relaxed);
+
+    state->inputPeak.store(peak, std::memory_order_relaxed);
+    state->inputCallbacks.fetch_add(1, std::memory_order_relaxed);
 
     return 0;
 }
 
-static void printBar(const char* label, float peak, float rms)
+static int wasapiOutputCallback(
+    void* outputBuffer,
+    void* inputBuffer,
+    unsigned int nFrames,
+    double streamTime,
+    RtAudioStreamStatus status,
+    void* userData)
 {
-    constexpr int width = 30;
+    (void)inputBuffer;
+    (void)streamTime;
 
-    const int peakBars = static_cast<int>(std::min(peak * width * 4.0f, static_cast<float>(width)));
+    auto* state = static_cast<BridgeState*>(userData);
 
-    std::cout << label << " [";
+    if (status)
+        state->underruns.fetch_add(1, std::memory_order_relaxed);
 
-    for (int i = 0; i < width; ++i)
-        std::cout << (i < peakBars ? "#" : " ");
+    auto* output = static_cast<float*>(outputBuffer);
 
-    std::cout << "] ";
+    std::vector<float> mono(nFrames);
+    const size_t read = state->ring.read(mono.data(), nFrames);
 
-    std::cout << "peak=" << std::fixed << std::setprecision(5) << peak
-              << " rms=" << std::fixed << std::setprecision(5) << rms
-              << "\n";
+    if (read < nFrames)
+        state->underruns.fetch_add(1, std::memory_order_relaxed);
+
+    for (unsigned int i = 0; i < nFrames; ++i)
+    {
+        float sample = 0.0f;
+
+        if (i < read)
+            sample = mono[i] * state->gain;
+
+        // Mono guitar to stereo headphones.
+        output[i * 2 + 0] = sample;
+        output[i * 2 + 1] = sample;
+    }
+
+    state->outputCallbacks.fetch_add(1, std::memory_order_relaxed);
+
+    return 0;
 }
 
 int main()
 {
-    constexpr unsigned int focusriteAsioDeviceId = 130;
+    constexpr unsigned int asioInputDeviceId = 130;    // Focusrite USB ASIO
+    constexpr unsigned int wasapiOutputDeviceId = 131; // Headphones (3- Arctis 7+)
+
     constexpr unsigned int sampleRate = 48000;
     unsigned int bufferFrames = 128;
 
-    std::cout << "ASIO2WASAPI Monitor - ASIO Input Meter\n";
-    std::cout << "Device: Focusrite USB ASIO [" << focusriteAsioDeviceId << "]\n";
-    std::cout << "Sample rate: " << sampleRate << "\n";
-    std::cout << "Buffer frames: " << bufferFrames << "\n";
-    std::cout << "Reading input channels 1 and 2\n";
+    std::cout << "ASIO2WASAPI Monitor - Bridge MVP\n\n";
+    std::cout << "ASIO input device:   " << asioInputDeviceId << " Focusrite USB ASIO\n";
+    std::cout << "ASIO input channel:  2\n";
+    std::cout << "WASAPI output device:" << wasapiOutputDeviceId << " Arctis 7+\n";
+    std::cout << "Sample rate:         " << sampleRate << "\n";
+    std::cout << "Buffer frames:       " << bufferFrames << "\n";
     std::cout << "Press Q to quit.\n\n";
 
-    MeterState meter;
+    BridgeState state;
 
     try
     {
-        RtAudio audio(RtAudio::WINDOWS_ASIO);
+        RtAudio asioInput(RtAudio::WINDOWS_ASIO);
+        RtAudio wasapiOutput(RtAudio::WINDOWS_WASAPI);
 
         RtAudio::StreamParameters inputParams;
-        inputParams.deviceId = focusriteAsioDeviceId;
+        inputParams.deviceId = asioInputDeviceId;
         inputParams.nChannels = 2;
         inputParams.firstChannel = 0;
 
-        RtAudio::StreamOptions options;
-        options.flags = RTAUDIO_MINIMIZE_LATENCY;
-        options.streamName = "ASIO2WASAPI Input Meter";
+        RtAudio::StreamParameters outputParams;
+        outputParams.deviceId = wasapiOutputDeviceId;
+        outputParams.nChannels = 2;
+        outputParams.firstChannel = 0;
 
-        audio.openStream(
+        RtAudio::StreamOptions inputOptions;
+        inputOptions.flags = RTAUDIO_MINIMIZE_LATENCY;
+        inputOptions.streamName = "ASIO2WASAPI ASIO Input";
+
+        RtAudio::StreamOptions outputOptions;
+        outputOptions.flags = RTAUDIO_MINIMIZE_LATENCY;
+        outputOptions.streamName = "ASIO2WASAPI WASAPI Output";
+
+        asioInput.openStream(
             nullptr,
             &inputParams,
             RTAUDIO_FLOAT32,
             sampleRate,
             &bufferFrames,
-            &inputCallback,
-            &meter,
-            &options
+            &asioInputCallback,
+            &state,
+            &inputOptions
         );
 
-        audio.startStream();
+        unsigned int outputBufferFrames = bufferFrames;
+
+        wasapiOutput.openStream(
+            &outputParams,
+            nullptr,
+            RTAUDIO_FLOAT32,
+            sampleRate,
+            &outputBufferFrames,
+            &wasapiOutputCallback,
+            &state,
+            &outputOptions
+        );
+
+        asioInput.startStream();
+
+        // Small pre-buffer so output does not start completely empty.
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+
+        wasapiOutput.startStream();
 
         while (true)
         {
             std::cout << "\x1b[2J\x1b[H";
 
-            std::cout << "ASIO2WASAPI Monitor - ASIO Input Meter\n\n";
-
-            printBar("Input 1", meter.peakCh1.load(std::memory_order_relaxed),
-                               meter.rmsCh1.load(std::memory_order_relaxed));
-
-            printBar("Input 2", meter.peakCh2.load(std::memory_order_relaxed),
-                               meter.rmsCh2.load(std::memory_order_relaxed));
-
-            std::cout << "\nCallbacks: " << meter.callbacks.load(std::memory_order_relaxed) << "\n";
-            std::cout << "Press Q to quit.\n";
+            std::cout << "ASIO2WASAPI Monitor - Bridge Running\n\n";
+            std::cout << "Input peak:       " << state.inputPeak.load(std::memory_order_relaxed) << "\n";
+            std::cout << "Ring available:   " << state.ring.available() << " samples\n";
+            std::cout << "Input callbacks:  " << state.inputCallbacks.load(std::memory_order_relaxed) << "\n";
+            std::cout << "Output callbacks: " << state.outputCallbacks.load(std::memory_order_relaxed) << "\n";
+            std::cout << "Underruns:        " << state.underruns.load(std::memory_order_relaxed) << "\n";
+            std::cout << "Overruns:         " << state.overruns.load(std::memory_order_relaxed) << "\n";
+            std::cout << "\nPress Q to quit.\n";
 
             if (_kbhit())
             {
@@ -145,14 +259,20 @@ int main()
                     break;
             }
 
-            std::this_thread::sleep_for(std::chrono::milliseconds(80));
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
 
-        if (audio.isStreamRunning())
-            audio.stopStream();
+        if (wasapiOutput.isStreamRunning())
+            wasapiOutput.stopStream();
 
-        if (audio.isStreamOpen())
-            audio.closeStream();
+        if (asioInput.isStreamRunning())
+            asioInput.stopStream();
+
+        if (wasapiOutput.isStreamOpen())
+            wasapiOutput.closeStream();
+
+        if (asioInput.isStreamOpen())
+            asioInput.closeStream();
     }
     catch (const std::exception& e)
     {
@@ -160,5 +280,6 @@ int main()
         return 1;
     }
 
+    std::cout << "Done.\n";
     return 0;
 }
