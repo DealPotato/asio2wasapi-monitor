@@ -16,6 +16,9 @@ add_subdirectory(external/rtaudio)
 
 add_executable(asio2wasapi-monitor
     src/main.cpp
+    src/Config.cpp
+    src/DeviceList.cpp
+    src/AudioBridge.cpp
 )
 
 target_link_libraries(asio2wasapi-monitor
