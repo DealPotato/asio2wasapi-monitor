@@ -369,6 +369,39 @@ ASIOError Asio2WasapiDriver::outputReady()
     return ASE_OK;
 }
 
+
+void Asio2WasapiDriver::writeOutputToRing(long activeBuffer)
+{
+    if (activeBuffer < 0 || activeBuffer > 1)
+        return;
+
+    const float* left = nullptr;
+    const float* right = nullptr;
+
+    for (const auto& info : bufferInfos_)
+    {
+        if (info.isInput)
+            continue;
+
+        if (!info.buffers[activeBuffer])
+            continue;
+
+        if (info.channelNum == 0)
+            left = static_cast<const float*>(info.buffers[activeBuffer]);
+
+        if (info.channelNum == 1)
+            right = static_cast<const float*>(info.buffers[activeBuffer]);
+    }
+
+    if (!left || !right)
+        return;
+
+    outputRing_.writeFromPlanar(
+        left,
+        right,
+        static_cast<std::size_t>(bufferSize_));
+}
+
 void Asio2WasapiDriver::callbackLoop()
 {
     debugLog("[ASIO2WASAPI] callbackLoop entered\n");
@@ -387,6 +420,7 @@ void Asio2WasapiDriver::callbackLoop()
 
             const float peak = measureOutputPeak(activeBufferIndex_);
             outputPeak_.store(peak, std::memory_order_relaxed);
+            writeOutputToRing(activeBufferIndex_);
 
             const auto count =
                 callbackCount_.fetch_add(1, std::memory_order_relaxed) + 1;
@@ -482,9 +516,7 @@ float Asio2WasapiDriver::measureOutputPeak(long activeBuffer) const
     return peak;
 }
 
-void Asio2WasapiDriver::debugPrintOutputPeak(
-    float peak,
-    unsigned long long callbackCount) const
+void Asio2WasapiDriver::debugPrintOutputPeak(float peak, unsigned long long callbackCount)
 {
     if ((callbackCount % 200) != 0)
         return;
@@ -494,9 +526,10 @@ void Asio2WasapiDriver::debugPrintOutputPeak(
     std::snprintf(
         message,
         sizeof(message),
-        "[ASIO2WASAPI] callback=%llu outputPeak=%f\n",
+        "[ASIO2WASAPI] callback=%llu outputPeak=%f ringFrames=%zu\n",
         callbackCount,
-        peak);
+        peak,
+        outputRing_.availableFrames());
 
     debugLog(message);
 }
