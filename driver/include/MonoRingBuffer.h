@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <mutex>
 #include <vector>
+#include <cstdint>
 
 class MonoRingBuffer
 {
@@ -21,6 +22,8 @@ public:
         readFrame_ = 0;
         writeFrame_ = 0;
         availableFrames_ = 0;
+        underrunFrames_ = 0;
+        droppedFrames_ = 0;
 
         std::fill(buffer_.begin(), buffer_.end(), 0.0f);
     }
@@ -55,6 +58,7 @@ public:
 
             readFrame_ = (readFrame_ + framesToDrop) % capacityFrames_;
             availableFrames_ -= framesToDrop;
+            droppedFrames_ += static_cast<std::uint64_t>(framesToDrop);
         }
 
         for (std::size_t i = 0; i < framesToWrite; ++i)
@@ -78,6 +82,11 @@ public:
 
         const std::size_t framesToRead = std::min(frames, availableFrames_);
 
+        if (framesToRead < frames)
+        {
+            underrunFrames_ += static_cast<std::uint64_t>(frames - framesToRead);
+        }
+
         for (std::size_t i = 0; i < framesToRead; ++i)
         {
             output[i] = buffer_[(readFrame_ + i) % capacityFrames_];
@@ -94,6 +103,17 @@ public:
         return framesToRead;
     }
 
+    std::uint64_t underrunFrames() const
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return underrunFrames_;
+    }
+
+    std::uint64_t droppedFrames() const
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return droppedFrames_;
+    }
 private:
     mutable std::mutex mutex_;
 
@@ -102,4 +122,6 @@ private:
     std::size_t readFrame_ = 0;
     std::size_t writeFrame_ = 0;
     std::size_t availableFrames_ = 0;
+    std::uint64_t underrunFrames_ = 0;
+    std::uint64_t droppedFrames_ = 0;
 };

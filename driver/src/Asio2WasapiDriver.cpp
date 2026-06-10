@@ -652,16 +652,20 @@ void Asio2WasapiDriver::debugPrintOutputPeak(float peak, unsigned long long call
     if ((callbackCount % 200) != 0)
         return;
 
-    char message[160] = {};
+    char message[512] = {};
 
     std::snprintf(
         message,
         sizeof(message),
-        "[ASIO2WASAPI] callback=%llu outputPeak=%f inputRingFrames=%zu outputRingFrames=%zu\n",
+        "[ASIO2WASAPI] callback=%llu outputPeak=%f inputRingFrames=%zu outputRingFrames=%zu inputUnder=%llu inputDrop=%llu outputUnder=%llu outputDrop=%llu\n",
         callbackCount,
         peak,
         inputRing_.availableFrames(),
-        outputRing_.availableFrames());
+        outputRing_.availableFrames(),
+        static_cast<unsigned long long>(inputRing_.underrunFrames()),
+        static_cast<unsigned long long>(inputRing_.droppedFrames()),
+        static_cast<unsigned long long>(outputRing_.underrunFrames()),
+        static_cast<unsigned long long>(outputRing_.droppedFrames()));
 
     debugLog(message);
 }
