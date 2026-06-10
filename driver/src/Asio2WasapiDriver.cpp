@@ -119,6 +119,13 @@ ASIOError Asio2WasapiDriver::start()
         return ASE_OK;
     }
 
+    config_ = DriverConfig::load();
+
+    enableTestInputTone_ = config_.enableTestTone;
+
+    inputRing_.resize(config_.inputRingFrames);
+    outputRing_.resize(config_.outputRingFrames);
+
     inputRing_.clear();
     outputRing_.clear();
 
@@ -126,7 +133,8 @@ ASIOError Asio2WasapiDriver::start()
         &inputRing_,
         static_cast<unsigned int>(sampleRate_),
         static_cast<unsigned int>(bufferSize_),
-        DriverSettings::HardwareInputChannel);
+        config_.hardwareInputChannel,
+        config_.preferredAsioInputDevice);
 
     if (!asioInputStarted)
     {

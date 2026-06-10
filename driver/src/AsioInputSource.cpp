@@ -28,7 +28,8 @@ bool AsioInputSource::start(
     MonoRingBuffer* ringBuffer,
     unsigned int sampleRate,
     unsigned int bufferFrames,
-    unsigned int sourceChannel)
+    unsigned int sourceChannel,
+    const std::string& preferredDeviceName)
 {
     debugLog("[ASIO2WASAPI] ASIO input start requested\n");
 
@@ -52,7 +53,7 @@ bool AsioInputSource::start(
 
     ringBuffer_ = ringBuffer;
     sourceChannel_ = sourceChannel;
-
+    preferredDeviceName_ = preferredDeviceName;
     try
     {
         const unsigned int deviceId = findInputDevice();
@@ -246,6 +247,12 @@ unsigned int AsioInputSource::findInputDevice() const
 
             if (fallbackDevice == 0)
                 fallbackDevice = deviceId;
+
+            if (!preferredDeviceName_.empty() &&
+                info.name.find(preferredDeviceName_) != std::string::npos)
+            {
+                return deviceId;
+            }
 
             if (info.name.find("Focusrite") != std::string::npos ||
                 info.name.find("Scarlett") != std::string::npos)

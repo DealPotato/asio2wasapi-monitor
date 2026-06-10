@@ -5,6 +5,7 @@
 #include "AsioInputSource.h"
 #include "MonoRingBuffer.h"
 #include "DriverSettings.h"
+#include "DriverConfig.h"
 
 #include <windows.h>
 
@@ -84,6 +85,9 @@ private:
     long bufferSize_ = DriverSettings::AsioBufferFrames;
 
     ASIOCallbacks* callbacks_ = nullptr;
+
+    DriverConfig config_;
+
     std::vector<ASIOBufferInfo> bufferInfos_;
     std::vector<std::array<std::vector<float>, 2>> ownedBuffers_;
 
