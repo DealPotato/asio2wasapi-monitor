@@ -51,6 +51,7 @@ add_library(asio2wasapi-virtual-asio SHARED
     driver/src/Asio2WasapiCom.cpp
     driver/src/dllmain.cpp
     driver/src/asio2wasapi-virtual-asio.def
+    driver/src/DebugLog.cpp
 )
 
 target_include_directories(asio2wasapi-virtual-asio

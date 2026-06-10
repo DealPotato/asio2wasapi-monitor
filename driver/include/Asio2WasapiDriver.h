@@ -62,7 +62,10 @@ public:
 
 private:
     void callbackLoop();
-    void clearBuffers(long activeBuffer);
+    void clearInputBuffers(long activeBuffer);
+    void clearOutputBuffers(long activeBuffer);
+    float measureOutputPeak(long activeBuffer) const;
+    void debugPrintOutputPeak(float peak, unsigned long long callbackCount) const;
 
     std::atomic<ULONG> refCount_{1};
 
@@ -79,6 +82,8 @@ private:
     std::thread callbackThread_;
 
     std::atomic<unsigned long long> samplePosition_{0};
+    std::atomic<float> outputPeak_{0.0f};
+    std::atomic<unsigned long long> callbackCount_{0};
     long activeBufferIndex_ = 0;
 
     char errorMessage_[128] = "No error";

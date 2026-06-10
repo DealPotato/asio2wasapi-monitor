@@ -1,16 +1,12 @@
 #include "Asio2WasapiDriver.h"
+#include "DebugLog.h"
 
 #include <algorithm>
 #include <chrono>
 #include <cstring>
-
-const CLSID CLSID_Asio2WasapiVirtualAsio =
-{
-    0x85b9bdb2,
-    0x2f44,
-    0x4d13,
-    { 0x9c, 0x7a, 0x2f, 0x28, 0x63, 0xa0, 0xd1, 0xd0 }
-};
+#include <cstdio>
+#include <cmath>
+#include <thread>
 
 static void copyString(char* destination, const char* source, std::size_t maxLength)
 {
@@ -85,8 +81,7 @@ ULONG STDMETHODCALLTYPE Asio2WasapiDriver::Release()
 
 ASIOBool Asio2WasapiDriver::init(void* sysHandle)
 {
-    sysHandle_ = sysHandle;
-    copyString(errorMessage_, "No error", sizeof(errorMessage_));
+    debugLog("[ASIO2WASAPI] init called\n");
     return ASIOTrue;
 }
 
@@ -107,37 +102,61 @@ void Asio2WasapiDriver::getErrorMessage(char* string)
 
 ASIOError Asio2WasapiDriver::start()
 {
-    if (running_)
-        return ASE_OK;
+    debugLog("[ASIO2WASAPI] start called\n");
 
-    running_ = true;
-    activeBufferIndex_ = 0;
+    if (!callbacks_)
+    {
+        debugLog("[ASIO2WASAPI] start failed: callbacks_ is null\n");
+        return ASE_NotPresent;
+    }
+
+    bool expected = false;
+
+    if (!running_.compare_exchange_strong(expected, true))
+    {
+        debugLog("[ASIO2WASAPI] start ignored: already running\n");
+        return ASE_OK;
+    }
 
     callbackThread_ = std::thread(&Asio2WasapiDriver::callbackLoop, this);
+
+    debugLog("[ASIO2WASAPI] callback thread started\n");
 
     return ASE_OK;
 }
 
 ASIOError Asio2WasapiDriver::stop()
 {
-    if (!running_)
-        return ASE_OK;
+    debugLog("[ASIO2WASAPI] stop called\n");
 
-    running_ = false;
+    if (!running_.exchange(false))
+    {
+        debugLog("[ASIO2WASAPI] stop ignored: not running\n");
+        return ASE_OK;
+    }
 
     if (callbackThread_.joinable())
+    {
         callbackThread_.join();
+        debugLog("[ASIO2WASAPI] callback thread joined\n");
+    }
 
     return ASE_OK;
 }
 
-ASIOError Asio2WasapiDriver::getChannels(long* numInputChannels, long* numOutputChannels)
+ASIOError Asio2WasapiDriver::getChannels(
+    long* numInputChannels,
+    long* numOutputChannels)
 {
-    if (!numInputChannels || !numOutputChannels)
-        return ASE_InvalidParameter;
+    debugLog("[ASIO2WASAPI] getChannels called\n");
 
-    *numInputChannels = 2;
-    *numOutputChannels = 2;
+    if (numInputChannels)
+        *numInputChannels = 2;
+
+    if (numOutputChannels)
+        *numOutputChannels = 2;
+
+    debugLog("[ASIO2WASAPI] getChannels returning 2 in / 2 out\n");
 
     return ASE_OK;
 }
@@ -159,13 +178,19 @@ ASIOError Asio2WasapiDriver::getBufferSize(
     long* preferredSize,
     long* granularity)
 {
-    if (!minSize || !maxSize || !preferredSize || !granularity)
-        return ASE_InvalidParameter;
+    OutputDebugStringA("[ASIO2WASAPI] getBufferSize called\n");
 
-    *minSize = 64;
-    *maxSize = 512;
-    *preferredSize = 128;
-    *granularity = -1;
+    if (minSize)
+        *minSize = 64;
+
+    if (maxSize)
+        *maxSize = 512;
+
+    if (preferredSize)
+        *preferredSize = 128;
+
+    if (granularity)
+        *granularity = -1;
 
     return ASE_OK;
 }
@@ -244,6 +269,8 @@ ASIOError Asio2WasapiDriver::getSamplePosition(ASIOSamples* sPos, ASIOTimeStamp*
 
 ASIOError Asio2WasapiDriver::getChannelInfo(ASIOChannelInfo* info)
 {
+    debugLog("[ASIO2WASAPI] getChannelInfo called\n");
+
     if (!info)
         return ASE_InvalidParameter;
 
@@ -277,7 +304,9 @@ ASIOError Asio2WasapiDriver::createBuffers(
     long numChannels,
     long bufferSize,
     ASIOCallbacks* callbacks)
-{
+{   
+    debugLog("[ASIO2WASAPI] createBuffers called\n");
+
     if (!bufferInfos || !callbacks || numChannels <= 0 || bufferSize <= 0)
         return ASE_InvalidParameter;
 
@@ -316,6 +345,8 @@ ASIOError Asio2WasapiDriver::disposeBuffers()
 
 ASIOError Asio2WasapiDriver::controlPanel()
 {
+    debugLog("[ASIO2WASAPI] controlPanel called\n");
+
     MessageBoxA(
         nullptr,
         "ASIO2WASAPI Virtual ASIO skeleton driver.\n\nNo control panel is implemented yet.",
@@ -340,23 +371,27 @@ ASIOError Asio2WasapiDriver::outputReady()
 
 void Asio2WasapiDriver::callbackLoop()
 {
-    const auto bufferDuration =
-        std::chrono::duration<double>(
-            static_cast<double>(bufferSize_) / static_cast<double>(sampleRate_));
+    debugLog("[ASIO2WASAPI] callbackLoop entered\n");
 
-    auto nextWake = std::chrono::steady_clock::now();
-
-    while (running_)
+    while (running_.load(std::memory_order_acquire))
     {
-        nextWake += std::chrono::duration_cast<std::chrono::steady_clock::duration>(bufferDuration);
-
         if (callbacks_)
         {
-            clearBuffers(activeBufferIndex_);
+            clearInputBuffers(activeBufferIndex_);
 
+            // Host yazmadan önce output buffer'ı temizle.
+            clearOutputBuffers(activeBufferIndex_);
+
+            // REAPER burada bizim output buffer'a ses yazmalı.
             callbacks_->bufferSwitch(activeBufferIndex_, ASIOFalse);
 
-            clearBuffers(activeBufferIndex_);
+            const float peak = measureOutputPeak(activeBufferIndex_);
+            outputPeak_.store(peak, std::memory_order_relaxed);
+
+            const auto count =
+                callbackCount_.fetch_add(1, std::memory_order_relaxed) + 1;
+
+            debugPrintOutputPeak(peak, count);
 
             samplePosition_.fetch_add(
                 static_cast<unsigned long long>(bufferSize_),
@@ -365,17 +400,28 @@ void Asio2WasapiDriver::callbackLoop()
             activeBufferIndex_ = 1 - activeBufferIndex_;
         }
 
-        std::this_thread::sleep_until(nextWake);
+        const double bufferMs =
+            (static_cast<double>(bufferSize_) / sampleRate_) * 1000.0;
+
+        const auto sleepMs =
+            static_cast<int>(bufferMs > 1.0 ? bufferMs : 1.0);
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(sleepMs));
     }
+
+    debugLog("[ASIO2WASAPI] callbackLoop exited\n");
 }
 
-void Asio2WasapiDriver::clearBuffers(long activeBuffer)
+void Asio2WasapiDriver::clearInputBuffers(long activeBuffer)
 {
     if (activeBuffer < 0 || activeBuffer > 1)
         return;
 
     for (auto& info : bufferInfos_)
     {
+        if (!info.isInput)
+            continue;
+
         if (!info.buffers[activeBuffer])
             continue;
 
@@ -386,4 +432,71 @@ void Asio2WasapiDriver::clearBuffers(long activeBuffer)
             buffer + bufferSize_,
             0.0f);
     }
+}
+
+void Asio2WasapiDriver::clearOutputBuffers(long activeBuffer)
+{
+    if (activeBuffer < 0 || activeBuffer > 1)
+        return;
+
+    for (auto& info : bufferInfos_)
+    {
+        if (info.isInput)
+            continue;
+
+        if (!info.buffers[activeBuffer])
+            continue;
+
+        auto* buffer = static_cast<float*>(info.buffers[activeBuffer]);
+
+        std::fill(
+            buffer,
+            buffer + bufferSize_,
+            0.0f);
+    }
+}
+
+float Asio2WasapiDriver::measureOutputPeak(long activeBuffer) const
+{
+    if (activeBuffer < 0 || activeBuffer > 1)
+        return 0.0f;
+
+    float peak = 0.0f;
+
+    for (const auto& info : bufferInfos_)
+    {
+        if (info.isInput)
+            continue;
+
+        if (!info.buffers[activeBuffer])
+            continue;
+
+        const auto* buffer = static_cast<const float*>(info.buffers[activeBuffer]);
+
+        for (long i = 0; i < bufferSize_; ++i)
+        {
+            peak = std::max(peak, std::fabs(buffer[i]));
+        }
+    }
+
+    return peak;
+}
+
+void Asio2WasapiDriver::debugPrintOutputPeak(
+    float peak,
+    unsigned long long callbackCount) const
+{
+    if ((callbackCount % 200) != 0)
+        return;
+
+    char message[160] = {};
+
+    std::snprintf(
+        message,
+        sizeof(message),
+        "[ASIO2WASAPI] callback=%llu outputPeak=%f\n",
+        callbackCount,
+        peak);
+
+    debugLog(message);
 }
