@@ -70,6 +70,7 @@ private:
     float measureOutputPeak(long activeBuffer) const;
     void debugPrintOutputPeak(float peak, unsigned long long callbackCount);
     void writeOutputToRing(long activeBuffer);
+    void generateTestInputTone(long activeBuffer);
 
     std::atomic<ULONG> refCount_{1};
 
@@ -89,6 +90,8 @@ private:
     std::atomic<float> outputPeak_{0.0f};
     StereoRingBuffer outputRing_{2048};
     WasapiOutputSink wasapiOutput_;
+    bool enableTestInputTone_ = true;
+    double testTonePhase_ = 0.0;
     std::atomic<unsigned long long> callbackCount_{0};
     long activeBufferIndex_ = 0;
 

@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cmath>
 #include <thread>
+#include <vector>
 
 static void copyString(char* destination, const char* source, std::size_t maxLength)
 {
@@ -360,6 +361,58 @@ ASIOError Asio2WasapiDriver::disposeBuffers()
     return ASE_OK;
 }
 
+void Asio2WasapiDriver::generateTestInputTone(long activeBuffer)
+{
+    if (activeBuffer < 0 || activeBuffer > 1)
+        return;
+
+    constexpr double frequency = 440.0;
+    constexpr double amplitude = 0.15;
+    constexpr double twoPi = 6.28318530717958647692;
+
+    const double phaseIncrement =
+        twoPi * frequency / static_cast<double>(sampleRate_);
+
+    std::vector<float> tone(static_cast<std::size_t>(bufferSize_));
+
+    for (long i = 0; i < bufferSize_; ++i)
+    {
+        tone[static_cast<std::size_t>(i)] =
+            static_cast<float>(std::sin(testTonePhase_) * amplitude);
+
+        testTonePhase_ += phaseIncrement;
+
+        if (testTonePhase_ >= twoPi)
+            testTonePhase_ -= twoPi;
+    }
+
+    for (auto& info : bufferInfos_)
+    {
+        if (!info.isInput)
+            continue;
+
+        if (!info.buffers[activeBuffer])
+            continue;
+
+        auto* buffer = static_cast<float*>(info.buffers[activeBuffer]);
+
+        if (info.channelNum == 0)
+        {
+            std::copy(
+                tone.begin(),
+                tone.end(),
+                buffer);
+        }
+        else
+        {
+            std::fill(
+                buffer,
+                buffer + bufferSize_,
+                0.0f);
+        }
+    }
+}
+
 ASIOError Asio2WasapiDriver::controlPanel()
 {
     debugLog("[ASIO2WASAPI] controlPanel called\n");
@@ -429,7 +482,10 @@ void Asio2WasapiDriver::callbackLoop()
     {
         if (callbacks_)
         {
-            clearInputBuffers(activeBufferIndex_);
+            if (enableTestInputTone_)
+                generateTestInputTone(activeBufferIndex_);
+            else
+                clearInputBuffers(activeBufferIndex_);
 
             // Host yazmadan önce output buffer'ı temizle.
             clearOutputBuffers(activeBufferIndex_);
