@@ -1,12 +1,18 @@
 #include "DebugLog.h"
+#include "DriverSettings.h"
 
 #include <windows.h>
 
 #include <cstdio>
 #include <cstring>
 
+
+
 void debugLog(const char* message)
-{
+{   
+    if (!DriverSettings::EnableDebugLogging)
+    return;
+
     if (!message)
         return;
 

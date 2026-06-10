@@ -126,7 +126,7 @@ ASIOError Asio2WasapiDriver::start()
         &inputRing_,
         static_cast<unsigned int>(sampleRate_),
         static_cast<unsigned int>(bufferSize_),
-        1); // Scarlett input 2, zero-based.
+        DriverSettings::HardwareInputChannel);
 
     if (!asioInputStarted)
     {
