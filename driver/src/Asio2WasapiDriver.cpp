@@ -118,6 +118,20 @@ ASIOError Asio2WasapiDriver::start()
         return ASE_OK;
     }
 
+    outputRing_.clear();
+
+    const unsigned int wasapiBufferFrames = 256;
+
+    const bool wasapiStarted = wasapiOutput_.start(
+        &outputRing_,
+        static_cast<unsigned int>(sampleRate_),
+        wasapiBufferFrames);
+
+    if (!wasapiStarted)
+    {
+        debugLog("[ASIO2WASAPI] warning: WASAPI output did not start\n");
+    }
+
     callbackThread_ = std::thread(&Asio2WasapiDriver::callbackLoop, this);
 
     debugLog("[ASIO2WASAPI] callback thread started\n");
@@ -140,6 +154,9 @@ ASIOError Asio2WasapiDriver::stop()
         callbackThread_.join();
         debugLog("[ASIO2WASAPI] callback thread joined\n");
     }
+
+    wasapiOutput_.stop();
+    outputRing_.clear();
 
     return ASE_OK;
 }
@@ -406,6 +423,8 @@ void Asio2WasapiDriver::callbackLoop()
 {
     debugLog("[ASIO2WASAPI] callbackLoop entered\n");
 
+    auto nextWake = std::chrono::steady_clock::now();
+
     while (running_.load(std::memory_order_acquire))
     {
         if (callbacks_)
@@ -437,10 +456,13 @@ void Asio2WasapiDriver::callbackLoop()
         const double bufferMs =
             (static_cast<double>(bufferSize_) / sampleRate_) * 1000.0;
 
-        const auto sleepMs =
-            static_cast<int>(bufferMs > 1.0 ? bufferMs : 1.0);
+        const auto bufferDuration = std::chrono::duration<double>(
+            static_cast<double>(bufferSize_) / static_cast<double>(sampleRate_));
 
-        std::this_thread::sleep_for(std::chrono::milliseconds(sleepMs));
+        nextWake += std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+            bufferDuration);
+
+        std::this_thread::sleep_until(nextWake);
     }
 
     debugLog("[ASIO2WASAPI] callbackLoop exited\n");

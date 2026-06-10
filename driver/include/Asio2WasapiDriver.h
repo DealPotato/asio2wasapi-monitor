@@ -1,6 +1,7 @@
 #pragma once
 
 #include "StereoRingBuffer.h"
+#include "WasapiOutputSink.h"
 
 #include <windows.h>
 
@@ -86,7 +87,8 @@ private:
 
     std::atomic<unsigned long long> samplePosition_{0};
     std::atomic<float> outputPeak_{0.0f};
-    StereoRingBuffer outputRing_{48000};
+    StereoRingBuffer outputRing_{2048};
+    WasapiOutputSink wasapiOutput_;
     std::atomic<unsigned long long> callbackCount_{0};
     long activeBufferIndex_ = 0;
 

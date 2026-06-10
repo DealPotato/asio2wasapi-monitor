@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <mutex>
 #include <vector>
 
 class StereoRingBuffer
@@ -15,20 +16,19 @@ public:
 
     void clear()
     {
+        std::lock_guard<std::mutex> lock(mutex_);
+
         readFrame_ = 0;
         writeFrame_ = 0;
         availableFrames_ = 0;
+
         std::fill(buffer_.begin(), buffer_.end(), 0.0f);
     }
 
     std::size_t availableFrames() const
     {
+        std::lock_guard<std::mutex> lock(mutex_);
         return availableFrames_;
-    }
-
-    std::size_t freeFrames() const
-    {
-        return capacityFrames_ - availableFrames_;
     }
 
     std::size_t writeFromPlanar(
@@ -39,22 +39,22 @@ public:
         if (!left || !right || frames == 0 || capacityFrames_ == 0)
             return 0;
 
+        std::lock_guard<std::mutex> lock(mutex_);
+
         std::size_t sourceOffset = 0;
         std::size_t framesToWrite = frames;
 
-        // If input is larger than the whole ring, keep only the newest frames.
         if (framesToWrite > capacityFrames_)
         {
             sourceOffset = framesToWrite - capacityFrames_;
             framesToWrite = capacityFrames_;
         }
 
-        // If there is not enough space, drop the oldest frames.
-        const std::size_t free = freeFrames();
+        const std::size_t freeFrames = capacityFrames_ - availableFrames_;
 
-        if (framesToWrite > free)
+        if (framesToWrite > freeFrames)
         {
-            const std::size_t framesToDrop = framesToWrite - free;
+            const std::size_t framesToDrop = framesToWrite - freeFrames;
 
             readFrame_ = (readFrame_ + framesToDrop) % capacityFrames_;
             availableFrames_ -= framesToDrop;
@@ -80,6 +80,8 @@ public:
         if (!output || frames == 0)
             return 0;
 
+        std::lock_guard<std::mutex> lock(mutex_);
+
         const std::size_t framesToRead = std::min(frames, availableFrames_);
 
         for (std::size_t i = 0; i < framesToRead; ++i)
@@ -103,6 +105,8 @@ public:
     }
 
 private:
+    mutable std::mutex mutex_;
+
     std::vector<float> buffer_;
     std::size_t capacityFrames_ = 0;
     std::size_t readFrame_ = 0;
