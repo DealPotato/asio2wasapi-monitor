@@ -63,7 +63,7 @@ bool AsioInputSource::start(
             debugLog("[ASIO2WASAPI] ASIO input start failed: no input device\n");
             return false;
         }
-
+        
         const auto info = audio_->getDeviceInfo(deviceId);
 
         openedChannels_ = std::min<unsigned int>(
@@ -226,6 +226,12 @@ unsigned int AsioInputSource::findInputDevice() const
 
             if (info.inputChannels == 0)
                 continue;
+
+            if (info.name.find("ASIO2WASAPI") != std::string::npos)
+            {
+                debugLog("[ASIO2WASAPI] ASIO input candidate skipped: self driver\n");
+                continue;
+            }
 
             char message[512] = {};
             std::snprintf(
