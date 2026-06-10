@@ -41,6 +41,10 @@
 
 # Build directories
 build/
+build-x64/
+installed-driver/
+.vs/
+out/
 Build/
 build-*/
 
@@ -68,10 +72,6 @@ vcpkg_installed/
 Testing/
 .cache/
 
-build/
-installed-driver/
-.vs/
-out/
 *.user
 *.suo
 *.log
