@@ -118,6 +118,20 @@ ASIOError Asio2WasapiDriver::start()
         return ASE_OK;
     }
 
+    outputRing_.clear();
+
+    const unsigned int wasapiBufferFrames = 256;
+
+    const bool wasapiStarted = wasapiOutput_.start(
+        &outputRing_,
+        static_cast<unsigned int>(sampleRate_),
+        wasapiBufferFrames);
+
+    if (!wasapiStarted)
+    {
+        debugLog("[ASIO2WASAPI] warning: WASAPI output did not start\n");
+    }
+
     callbackThread_ = std::thread(&Asio2WasapiDriver::callbackLoop, this);
 
     debugLog("[ASIO2WASAPI] callback thread started\n");
@@ -140,6 +154,9 @@ ASIOError Asio2WasapiDriver::stop()
         callbackThread_.join();
         debugLog("[ASIO2WASAPI] callback thread joined\n");
     }
+
+    wasapiOutput_.stop();
+    outputRing_.clear();
 
     return ASE_OK;
 }
@@ -369,9 +386,44 @@ ASIOError Asio2WasapiDriver::outputReady()
     return ASE_OK;
 }
 
+
+void Asio2WasapiDriver::writeOutputToRing(long activeBuffer)
+{
+    if (activeBuffer < 0 || activeBuffer > 1)
+        return;
+
+    const float* left = nullptr;
+    const float* right = nullptr;
+
+    for (const auto& info : bufferInfos_)
+    {
+        if (info.isInput)
+            continue;
+
+        if (!info.buffers[activeBuffer])
+            continue;
+
+        if (info.channelNum == 0)
+            left = static_cast<const float*>(info.buffers[activeBuffer]);
+
+        if (info.channelNum == 1)
+            right = static_cast<const float*>(info.buffers[activeBuffer]);
+    }
+
+    if (!left || !right)
+        return;
+
+    outputRing_.writeFromPlanar(
+        left,
+        right,
+        static_cast<std::size_t>(bufferSize_));
+}
+
 void Asio2WasapiDriver::callbackLoop()
 {
     debugLog("[ASIO2WASAPI] callbackLoop entered\n");
+
+    auto nextWake = std::chrono::steady_clock::now();
 
     while (running_.load(std::memory_order_acquire))
     {
@@ -387,6 +439,7 @@ void Asio2WasapiDriver::callbackLoop()
 
             const float peak = measureOutputPeak(activeBufferIndex_);
             outputPeak_.store(peak, std::memory_order_relaxed);
+            writeOutputToRing(activeBufferIndex_);
 
             const auto count =
                 callbackCount_.fetch_add(1, std::memory_order_relaxed) + 1;
@@ -403,10 +456,13 @@ void Asio2WasapiDriver::callbackLoop()
         const double bufferMs =
             (static_cast<double>(bufferSize_) / sampleRate_) * 1000.0;
 
-        const auto sleepMs =
-            static_cast<int>(bufferMs > 1.0 ? bufferMs : 1.0);
+        const auto bufferDuration = std::chrono::duration<double>(
+            static_cast<double>(bufferSize_) / static_cast<double>(sampleRate_));
 
-        std::this_thread::sleep_for(std::chrono::milliseconds(sleepMs));
+        nextWake += std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+            bufferDuration);
+
+        std::this_thread::sleep_until(nextWake);
     }
 
     debugLog("[ASIO2WASAPI] callbackLoop exited\n");
@@ -482,9 +538,7 @@ float Asio2WasapiDriver::measureOutputPeak(long activeBuffer) const
     return peak;
 }
 
-void Asio2WasapiDriver::debugPrintOutputPeak(
-    float peak,
-    unsigned long long callbackCount) const
+void Asio2WasapiDriver::debugPrintOutputPeak(float peak, unsigned long long callbackCount)
 {
     if ((callbackCount % 200) != 0)
         return;
@@ -494,9 +548,10 @@ void Asio2WasapiDriver::debugPrintOutputPeak(
     std::snprintf(
         message,
         sizeof(message),
-        "[ASIO2WASAPI] callback=%llu outputPeak=%f\n",
+        "[ASIO2WASAPI] callback=%llu outputPeak=%f ringFrames=%zu\n",
         callbackCount,
-        peak);
+        peak,
+        outputRing_.availableFrames());
 
     debugLog(message);
 }
