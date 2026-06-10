@@ -2,6 +2,8 @@
 
 #include "StereoRingBuffer.h"
 #include "WasapiOutputSink.h"
+#include "AsioInputSource.h"
+#include "MonoRingBuffer.h"
 
 #include <windows.h>
 
@@ -71,6 +73,7 @@ private:
     void debugPrintOutputPeak(float peak, unsigned long long callbackCount);
     void writeOutputToRing(long activeBuffer);
     void generateTestInputTone(long activeBuffer);
+    void fillHardwareInputFromRing(long activeBuffer);
 
     std::atomic<ULONG> refCount_{1};
 
@@ -90,7 +93,10 @@ private:
     std::atomic<float> outputPeak_{0.0f};
     StereoRingBuffer outputRing_{2048};
     WasapiOutputSink wasapiOutput_;
-    bool enableTestInputTone_ = true;
+    MonoRingBuffer inputRing_{2048};
+    AsioInputSource asioInput_;
+    std::vector<float> inputScratch_;
+    bool enableTestInputTone_ = false;
     double testTonePhase_ = 0.0;
     std::atomic<unsigned long long> callbackCount_{0};
     long activeBufferIndex_ = 0;

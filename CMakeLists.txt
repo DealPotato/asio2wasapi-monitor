@@ -53,6 +53,7 @@ add_library(asio2wasapi-virtual-asio SHARED
     driver/src/asio2wasapi-virtual-asio.def
     driver/src/DebugLog.cpp
     driver/src/WasapiOutputSink.cpp
+    driver/src/AsioInputSource.cpp
 )
 
 target_include_directories(asio2wasapi-virtual-asio

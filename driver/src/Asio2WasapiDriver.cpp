@@ -119,7 +119,19 @@ ASIOError Asio2WasapiDriver::start()
         return ASE_OK;
     }
 
+    inputRing_.clear();
     outputRing_.clear();
+
+    const bool asioInputStarted = asioInput_.start(
+        &inputRing_,
+        static_cast<unsigned int>(sampleRate_),
+        static_cast<unsigned int>(bufferSize_),
+        1); // Scarlett input 2, zero-based.
+
+    if (!asioInputStarted)
+    {
+        debugLog("[ASIO2WASAPI] warning: ASIO hardware input did not start\n");
+    }
 
     const unsigned int wasapiBufferFrames = 256;
 
@@ -155,6 +167,9 @@ ASIOError Asio2WasapiDriver::stop()
         callbackThread_.join();
         debugLog("[ASIO2WASAPI] callback thread joined\n");
     }
+
+    asioInput_.stop();
+    inputRing_.clear();
 
     wasapiOutput_.stop();
     outputRing_.clear();
@@ -413,6 +428,44 @@ void Asio2WasapiDriver::generateTestInputTone(long activeBuffer)
     }
 }
 
+void Asio2WasapiDriver::fillHardwareInputFromRing(long activeBuffer)
+{
+    if (activeBuffer < 0 || activeBuffer > 1)
+        return;
+
+    inputScratch_.resize(static_cast<std::size_t>(bufferSize_));
+
+    inputRing_.read(
+        inputScratch_.data(),
+        static_cast<std::size_t>(bufferSize_));
+
+    for (auto& info : bufferInfos_)
+    {
+        if (!info.isInput)
+            continue;
+
+        if (!info.buffers[activeBuffer])
+            continue;
+
+        auto* buffer = static_cast<float*>(info.buffers[activeBuffer]);
+
+        if (info.channelNum == 0)
+        {
+            std::copy(
+                inputScratch_.begin(),
+                inputScratch_.end(),
+                buffer);
+        }
+        else
+        {
+            std::fill(
+                buffer,
+                buffer + bufferSize_,
+                0.0f);
+        }
+    }
+}
+
 ASIOError Asio2WasapiDriver::controlPanel()
 {
     debugLog("[ASIO2WASAPI] controlPanel called\n");
@@ -485,7 +538,7 @@ void Asio2WasapiDriver::callbackLoop()
             if (enableTestInputTone_)
                 generateTestInputTone(activeBufferIndex_);
             else
-                clearInputBuffers(activeBufferIndex_);
+                fillHardwareInputFromRing(activeBufferIndex_);
 
             // Host yazmadan önce output buffer'ı temizle.
             clearOutputBuffers(activeBufferIndex_);
@@ -604,9 +657,10 @@ void Asio2WasapiDriver::debugPrintOutputPeak(float peak, unsigned long long call
     std::snprintf(
         message,
         sizeof(message),
-        "[ASIO2WASAPI] callback=%llu outputPeak=%f ringFrames=%zu\n",
+        "[ASIO2WASAPI] callback=%llu outputPeak=%f inputRingFrames=%zu outputRingFrames=%zu\n",
         callbackCount,
         peak,
+        inputRing_.availableFrames(),
         outputRing_.availableFrames());
 
     debugLog(message);
