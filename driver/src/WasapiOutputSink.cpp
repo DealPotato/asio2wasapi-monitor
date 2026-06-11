@@ -26,7 +26,8 @@ WasapiOutputSink::~WasapiOutputSink()
 bool WasapiOutputSink::start(
     StereoRingBuffer* ringBuffer,
     unsigned int sampleRate,
-    unsigned int bufferFrames)
+    unsigned int bufferFrames,
+    float outputGain)
 {
     debugLog("[ASIO2WASAPI] WASAPI output start requested\n");
 
@@ -49,7 +50,7 @@ bool WasapiOutputSink::start(
     }
 
     ringBuffer_ = ringBuffer;
-
+    outputGain_ = outputGain;
     try
     {
         const unsigned int deviceId = audio_->getDefaultOutputDevice();
@@ -182,7 +183,7 @@ int WasapiOutputSink::render(
 
     for (unsigned int i = 0; i < nBufferFrames * 2; ++i)
     {
-        output[i] = std::clamp(output[i], -1.0f, 1.0f);
+        output[i] = std::clamp(output[i] * outputGain_, -1.0f, 1.0f);
     }
 
     return 0;

@@ -146,7 +146,8 @@ ASIOError Asio2WasapiDriver::start()
     const bool wasapiStarted = wasapiOutput_.start(
         &outputRing_,
         static_cast<unsigned int>(sampleRate_),
-        wasapiBufferFrames);
+        config_.wasapiBufferFrames,
+        config_.outputGain);
 
     if (!wasapiStarted)
     {
@@ -459,11 +460,11 @@ void Asio2WasapiDriver::fillHardwareInputFromRing(long activeBuffer)
 
         if (info.channelNum == 0)
         {
-            std::copy(
-                inputScratch_.begin(),
-                inputScratch_.end(),
-                buffer);
-        }
+            for (std::size_t i = 0; i < inputScratch_.size(); ++i)
+            {
+                buffer[i] = inputScratch_[i] * config_.inputGain;
+            }
+}
         else
         {
             std::fill(

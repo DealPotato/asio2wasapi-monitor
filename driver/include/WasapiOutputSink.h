@@ -16,7 +16,8 @@ public:
     bool start(
         StereoRingBuffer* ringBuffer,
         unsigned int sampleRate,
-        unsigned int bufferFrames);
+        unsigned int bufferFrames,
+        float outputGain);
 
     void stop();
 
@@ -42,4 +43,5 @@ private:
 
     bool running_ = false;
     std::string lastError_;
+    float outputGain_ = 1.0f;
 };
