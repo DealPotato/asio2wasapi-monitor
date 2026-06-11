@@ -4,6 +4,8 @@
 #include "WasapiOutputSink.h"
 #include "AsioInputSource.h"
 #include "MonoRingBuffer.h"
+#include "DriverSettings.h"
+#include "DriverConfig.h"
 
 #include <windows.h>
 
@@ -19,6 +21,7 @@
 #include <array>
 #include <thread>
 #include <vector>
+#include <filesystem>
 
 extern const CLSID CLSID_Asio2WasapiVirtualAsio;
 
@@ -74,15 +77,20 @@ private:
     void writeOutputToRing(long activeBuffer);
     void generateTestInputTone(long activeBuffer);
     void fillHardwareInputFromRing(long activeBuffer);
+    void reloadConfigIfChanged();
+    void applyRuntimeConfig(const DriverConfig& newConfig);
 
     std::atomic<ULONG> refCount_{1};
 
     void* sysHandle_ = nullptr;
 
-    ASIOSampleRate sampleRate_ = 48000.0;
-    long bufferSize_ = 128;
+    ASIOSampleRate sampleRate_ = DriverSettings::DefaultSampleRate;
+    long bufferSize_ = DriverSettings::AsioBufferFrames;
 
     ASIOCallbacks* callbacks_ = nullptr;
+
+    DriverConfig config_;
+
     std::vector<ASIOBufferInfo> bufferInfos_;
     std::vector<std::array<std::vector<float>, 2>> ownedBuffers_;
 
@@ -91,15 +99,17 @@ private:
 
     std::atomic<unsigned long long> samplePosition_{0};
     std::atomic<float> outputPeak_{0.0f};
-    StereoRingBuffer outputRing_{2048};
+    StereoRingBuffer outputRing_{DriverSettings::OutputRingFrames};
+    MonoRingBuffer inputRing_{DriverSettings::InputRingFrames};
     WasapiOutputSink wasapiOutput_;
-    MonoRingBuffer inputRing_{2048};
     AsioInputSource asioInput_;
     std::vector<float> inputScratch_;
-    bool enableTestInputTone_ = false;
+    bool enableTestInputTone_ = DriverSettings::EnableTestInputTone;
     double testTonePhase_ = 0.0;
     std::atomic<unsigned long long> callbackCount_{0};
     long activeBufferIndex_ = 0;
+    std::filesystem::file_time_type configWriteTime_{};
+    unsigned long long lastConfigCheckCallback_ = 0;
 
     char errorMessage_[128] = "No error";
 };

@@ -18,7 +18,8 @@ public:
         MonoRingBuffer* ringBuffer,
         unsigned int sampleRate,
         unsigned int bufferFrames,
-        unsigned int sourceChannel);
+        unsigned int sourceChannel,
+        const std::string& preferredDeviceName);
 
     void stop();
 
@@ -43,6 +44,7 @@ private:
 
     std::unique_ptr<RtAudio> audio_;
     MonoRingBuffer* ringBuffer_ = nullptr;
+    std::string preferredDeviceName_ = "Focusrite";
 
     unsigned int sourceChannel_ = 1;   // Scarlett input 2, zero-based.
     unsigned int openedChannels_ = 2;

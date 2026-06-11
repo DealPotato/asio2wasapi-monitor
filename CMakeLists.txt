@@ -54,6 +54,7 @@ add_library(asio2wasapi-virtual-asio SHARED
     driver/src/DebugLog.cpp
     driver/src/WasapiOutputSink.cpp
     driver/src/AsioInputSource.cpp
+    driver/src/DriverConfig.cpp
 )
 
 target_include_directories(asio2wasapi-virtual-asio
@@ -73,6 +74,19 @@ target_link_libraries(asio2wasapi-virtual-asio
         rtaudio
         ole32
         user32
+        shell32
+)
+
+add_executable(asio2wasapi-devices
+    tools/device-list/main.cpp
+)
+
+target_include_directories(asio2wasapi-devices PRIVATE
+    external/rtaudio/include
+)
+
+target_link_libraries(asio2wasapi-devices PRIVATE
+    rtaudio
 )
 
 set_target_properties(asio2wasapi-virtual-asio
