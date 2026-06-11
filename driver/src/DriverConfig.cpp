@@ -32,11 +32,6 @@ namespace
         return std::filesystem::path(path).parent_path();
     }
 
-    std::filesystem::path getConfigPath()
-    {
-        return getModuleDirectory() / "asio2wasapi-monitor.ini";
-    }
-
     std::string trim(std::string value)
     {
         auto isSpace = [](unsigned char c) {
@@ -80,6 +75,8 @@ namespace
             << "enableTestTone=false\n"
             << "\n"
             << "[Output]\n"
+            << "useDefaultWasapiDevice=true\n"
+            << "preferredWasapiDevice=\n"
             << "outputGain=1.0\n"
             << "\n"
             << "[Debug]\n"
@@ -212,11 +209,33 @@ namespace
     }
 }
 
+std::filesystem::path DriverConfig::configPath()
+{
+    return getModuleDirectory() / "asio2wasapi-monitor.ini";
+}
+
+std::filesystem::file_time_type DriverConfig::lastWriteTime()
+{
+    try
+    {
+        const auto path = configPath();
+
+        if (!std::filesystem::exists(path))
+            return {};
+
+        return std::filesystem::last_write_time(path);
+    }
+    catch (...)
+    {
+        return {};
+    }
+}
+
 DriverConfig DriverConfig::load()
 {
     DriverConfig config;
 
-    const auto path = getConfigPath();
+    const auto path = configPath();
 
     if (!std::filesystem::exists(path))
     {
@@ -236,6 +255,8 @@ DriverConfig DriverConfig::load()
     config.inputGain = getFloat(values, "Input.inputGain", config.inputGain);
     config.enableTestTone = getBool(values, "Input.enableTestTone", config.enableTestTone);
 
+    config.useDefaultWasapiDevice = getBool(values, "Output.useDefaultWasapiDevice", config.useDefaultWasapiDevice);
+    config.preferredWasapiDevice = getString(values, "Output.preferredWasapiDevice", config.preferredWasapiDevice);
     config.outputGain = getFloat(values, "Output.outputGain", config.outputGain);
 
     config.enableLogging = getBool(values, "Debug.enableLogging", config.enableLogging);

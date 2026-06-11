@@ -21,6 +21,7 @@
 #include <array>
 #include <thread>
 #include <vector>
+#include <filesystem>
 
 extern const CLSID CLSID_Asio2WasapiVirtualAsio;
 
@@ -76,6 +77,8 @@ private:
     void writeOutputToRing(long activeBuffer);
     void generateTestInputTone(long activeBuffer);
     void fillHardwareInputFromRing(long activeBuffer);
+    void reloadConfigIfChanged();
+    void applyRuntimeConfig(const DriverConfig& newConfig);
 
     std::atomic<ULONG> refCount_{1};
 
@@ -105,6 +108,8 @@ private:
     double testTonePhase_ = 0.0;
     std::atomic<unsigned long long> callbackCount_{0};
     long activeBufferIndex_ = 0;
+    std::filesystem::file_time_type configWriteTime_{};
+    unsigned long long lastConfigCheckCallback_ = 0;
 
     char errorMessage_[128] = "No error";
 };

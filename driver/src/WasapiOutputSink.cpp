@@ -27,7 +27,9 @@ bool WasapiOutputSink::start(
     StereoRingBuffer* ringBuffer,
     unsigned int sampleRate,
     unsigned int bufferFrames,
-    float outputGain)
+    float outputGain,
+    bool useDefaultDevice,
+    const std::string& preferredDeviceName)
 {
     debugLog("[ASIO2WASAPI] WASAPI output start requested\n");
 
@@ -50,7 +52,9 @@ bool WasapiOutputSink::start(
     }
 
     ringBuffer_ = ringBuffer;
-    outputGain_ = outputGain;
+    outputGain_.store(outputGain);
+    useDefaultDevice_ = useDefaultDevice;
+    preferredDeviceName_ = preferredDeviceName;
     try
     {
         const unsigned int deviceId = audio_->getDefaultOutputDevice();
@@ -63,7 +67,7 @@ bool WasapiOutputSink::start(
         }
 
         RtAudio::StreamParameters outputParameters;
-        outputParameters.deviceId = deviceId;
+        outputParameters.deviceId = findOutputDevice();
         outputParameters.nChannels = 2;
         outputParameters.firstChannel = 0;
 
@@ -181,10 +185,51 @@ int WasapiOutputSink::render(
 
     ringBuffer_->readInterleaved(output, nBufferFrames);
 
+    const float outputGain = outputGain_.load();
+
     for (unsigned int i = 0; i < nBufferFrames * 2; ++i)
     {
-        output[i] = std::clamp(output[i] * outputGain_, -1.0f, 1.0f);
+        output[i] = std::clamp(output[i] * outputGain, -1.0f, 1.0f);
     }
 
     return 0;
+}
+
+unsigned int WasapiOutputSink::findOutputDevice() const
+{
+    if (!audio_)
+        return 0;
+
+    if (useDefaultDevice_ || preferredDeviceName_.empty())
+    {
+        return audio_->getDefaultOutputDevice();
+    }
+
+    unsigned int fallbackDevice = audio_->getDefaultOutputDevice();
+
+    for (const auto deviceId : audio_->getDeviceIds())
+    {
+        try
+        {
+            const auto info = audio_->getDeviceInfo(deviceId);
+
+            if (info.outputChannels == 0)
+                continue;
+
+            if (info.name.find(preferredDeviceName_) != std::string::npos)
+            {
+                return deviceId;
+            }
+        }
+        catch (...)
+        {
+        }
+    }
+
+    return fallbackDevice;
+}
+
+void WasapiOutputSink::setOutputGain(float outputGain)
+{
+    outputGain_.store(outputGain);
 }
