@@ -1,0 +1,2 @@
+C:\Users\Ozan\Desktop\asio2wasapi-monitor\tools\Asio2Wasapi.ControlPanel\bin\Release\net8.0-windows\win-x64\publish\asio2wasapi-control.pdb
+C:\Users\Ozan\Desktop\asio2wasapi-monitor\tools\Asio2Wasapi.ControlPanel\bin\Release\net8.0-windows\win-x64\publish\asio2wasapi-control.exe
