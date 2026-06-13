@@ -8,6 +8,7 @@
 #include <cmath>
 #include <thread>
 #include <vector>
+#include <avrt.h>
 
 static void copyString(char* destination, const char* source, std::size_t maxLength)
 {
@@ -531,6 +532,22 @@ void Asio2WasapiDriver::callbackLoop()
 
     auto nextWake = std::chrono::steady_clock::now();
 
+    DWORD mmcssTaskIndex = 0;
+
+    HANDLE mmcssHandle = AvSetMmThreadCharacteristicsA(
+        "Pro Audio",
+        &mmcssTaskIndex);
+
+    if (mmcssHandle)
+    {
+        AvSetMmThreadPriority(mmcssHandle, AVRT_PRIORITY_CRITICAL);
+        debugLog("[ASIO2WASAPI] Callback thread registered with MMCSS Pro Audio\n");
+    }
+    else
+    {
+        debugLog("[ASIO2WASAPI] Failed to register callback thread with MMCSS\n");
+    }
+
     while (running_.load(std::memory_order_acquire))
     {
         if (callbacks_)
@@ -572,6 +589,12 @@ void Asio2WasapiDriver::callbackLoop()
             bufferDuration);
 
         std::this_thread::sleep_until(nextWake);
+    }
+
+    if (mmcssHandle)
+    {
+        AvRevertMmThreadCharacteristics(mmcssHandle);
+        debugLog("[ASIO2WASAPI] Callback thread unregistered from MMCSS\n");
     }
 
     debugLog("[ASIO2WASAPI] callbackLoop exited\n");

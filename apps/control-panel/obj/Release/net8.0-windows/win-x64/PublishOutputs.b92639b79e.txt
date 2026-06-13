@@ -1,0 +1,2 @@
+C:\Users\Ozan\Desktop\asio2wasapi-monitor\build-x64\control-panel-publish\asio2wasapi-control.pdb
+C:\Users\Ozan\Desktop\asio2wasapi-monitor\build-x64\control-panel-publish\asio2wasapi-control.exe
