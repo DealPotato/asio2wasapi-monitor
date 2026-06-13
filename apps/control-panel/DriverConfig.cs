@@ -17,6 +17,8 @@ internal sealed class DriverConfig
 
     public bool UseDefaultWasapiDevice { get; set; } = true;
     public string PreferredWasapiDevice { get; set; } = "";
+
+    public bool WasapiExclusiveMode { get; set; } = false;
     public float OutputGain { get; set; } = 1.0f;
 
     public bool EnableLogging { get; set; } = true;
@@ -40,7 +42,7 @@ internal sealed class DriverConfig
         config.UseDefaultWasapiDevice = ini.GetBool("Output", "useDefaultWasapiDevice", config.UseDefaultWasapiDevice);
         config.PreferredWasapiDevice = ini.GetString("Output", "preferredWasapiDevice", config.PreferredWasapiDevice);
         config.OutputGain = ini.GetFloat("Output", "outputGain", config.OutputGain);
-
+        config.WasapiExclusiveMode = ini.GetBool("Output", "wasapiExclusiveMode", config.WasapiExclusiveMode);
         config.EnableLogging = ini.GetBool("Debug", "enableLogging", config.EnableLogging);
 
         return config;
@@ -64,6 +66,7 @@ internal sealed class DriverConfig
         ini.Set("Output", "useDefaultWasapiDevice", UseDefaultWasapiDevice ? "true" : "false");
         ini.Set("Output", "preferredWasapiDevice", PreferredWasapiDevice);
         ini.Set("Output", "outputGain", OutputGain.ToString(CultureInfo.InvariantCulture));
+        ini.Set("Output", "wasapiExclusiveMode", WasapiExclusiveMode ? "true" : "false");
 
         ini.Set("Debug", "enableLogging", EnableLogging ? "true" : "false");
 

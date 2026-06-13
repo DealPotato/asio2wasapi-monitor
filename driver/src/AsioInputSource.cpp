@@ -28,7 +28,8 @@ bool AsioInputSource::start(
     MonoRingBuffer* ringBuffer,
     unsigned int sampleRate,
     unsigned int bufferFrames,
-    unsigned int sourceChannel)
+    unsigned int sourceChannel,
+    const std::string& preferredDeviceName)
 {
     debugLog("[ASIO2WASAPI] ASIO input start requested\n");
 
@@ -52,6 +53,7 @@ bool AsioInputSource::start(
 
     ringBuffer_ = ringBuffer;
     sourceChannel_ = sourceChannel;
+    preferredDeviceName_ = preferredDeviceName;
 
     try
     {
@@ -226,7 +228,13 @@ unsigned int AsioInputSource::findInputDevice() const
 
             if (info.inputChannels == 0)
                 continue;
-
+            
+            if (info.name.find("ASIO2WASAPI") != std::string::npos)
+            {
+                debugLog("[ASIO2WASAPI] ASIO input candidate skipped: self driver\n");
+                continue;
+            }
+            
             char message[512] = {};
             std::snprintf(
                 message,

@@ -9,6 +9,8 @@
 #include <thread>
 #include <vector>
 #include <avrt.h>
+#include <filesystem>
+#include <shellapi.h>
 
 static void copyString(char* destination, const char* source, std::size_t maxLength)
 {
@@ -120,26 +122,39 @@ ASIOError Asio2WasapiDriver::start()
         return ASE_OK;
     }
 
+    config_ = DriverConfig::load();
+
+    enableTestInputTone_ = config_.enableTestTone;
+
+    inputRing_.resize(config_.inputRingFrames);
+    outputRing_.resize(config_.outputRingFrames);
+
     inputRing_.clear();
     outputRing_.clear();
 
-    const bool asioInputStarted = asioInput_.start(
-        &inputRing_,
-        static_cast<unsigned int>(sampleRate_),
-        static_cast<unsigned int>(bufferSize_),
-        1); // Scarlett input 2, zero-based.
-
-    if (!asioInputStarted)
+    if (!enableTestInputTone_)
     {
-        debugLog("[ASIO2WASAPI] warning: ASIO hardware input did not start\n");
-    }
+        const bool asioInputStarted = asioInput_.start(
+            &inputRing_,
+            static_cast<unsigned int>(sampleRate_),
+            static_cast<unsigned int>(bufferSize_),
+            config_.hardwareInputChannel,
+            config_.preferredAsioInputDevice);
 
-    const unsigned int wasapiBufferFrames = 256;
+        if (!asioInputStarted)
+        {
+            debugLog("[ASIO2WASAPI] warning: ASIO hardware input did not start\n");
+        }
+    }
 
     const bool wasapiStarted = wasapiOutput_.start(
         &outputRing_,
         static_cast<unsigned int>(sampleRate_),
-        wasapiBufferFrames);
+        config_.wasapiBufferFrames,
+        config_.outputGain,
+        config_.useDefaultWasapiDevice,
+        config_.preferredWasapiDevice,
+        config_.wasapiExclusiveMode);
 
     if (!wasapiStarted)
     {
@@ -471,11 +486,42 @@ ASIOError Asio2WasapiDriver::controlPanel()
 {
     debugLog("[ASIO2WASAPI] controlPanel called\n");
 
-    MessageBoxA(
+    HMODULE module = nullptr;
+
+    GetModuleHandleExA(
+        GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+            GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+        reinterpret_cast<LPCSTR>(&copyString),
+        &module);
+
+    char modulePath[MAX_PATH] = {};
+
+    GetModuleFileNameA(module, modulePath, MAX_PATH);
+
+    const std::filesystem::path driverDirectory =
+        std::filesystem::path(modulePath).parent_path();
+
+    const std::filesystem::path controlPanelPath =
+        driverDirectory / "asio2wasapi-control.exe";
+
+    if (!std::filesystem::exists(controlPanelPath))
+    {
+        MessageBoxA(
+            nullptr,
+            "asio2wasapi-control.exe was not found next to the driver DLL.",
+            "ASIO2WASAPI Virtual ASIO",
+            MB_OK | MB_ICONWARNING);
+
+        return ASE_NotPresent;
+    }
+
+    ShellExecuteA(
         nullptr,
-        "ASIO2WASAPI Virtual ASIO skeleton driver.\n\nNo control panel is implemented yet.",
-        "ASIO2WASAPI Virtual ASIO",
-        MB_OK | MB_ICONINFORMATION);
+        "open",
+        controlPanelPath.string().c_str(),
+        nullptr,
+        driverDirectory.string().c_str(),
+        SW_SHOWNORMAL);
 
     return ASE_OK;
 }

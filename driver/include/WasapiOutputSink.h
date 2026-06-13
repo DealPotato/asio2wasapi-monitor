@@ -6,6 +6,7 @@
 
 #include <memory>
 #include <string>
+#include <atomic>
 
 class WasapiOutputSink
 {
@@ -16,7 +17,11 @@ public:
     bool start(
         StereoRingBuffer* ringBuffer,
         unsigned int sampleRate,
-        unsigned int bufferFrames);
+        unsigned int bufferFrames,
+        float outputGain,
+        bool useDefaultDevice,
+        const std::string& preferredDeviceName,
+        bool exclusiveMode);
 
     void stop();
 
@@ -42,4 +47,11 @@ private:
 
     bool running_ = false;
     std::string lastError_;
+
+    std::atomic<float> outputGain_{1.0f};
+    bool useDefaultDevice_ = true;
+    std::string preferredDeviceName_;
+        bool exclusiveMode_ = false;
+
+    unsigned int findOutputDevice() const;
 };

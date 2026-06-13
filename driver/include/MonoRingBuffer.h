@@ -94,6 +94,19 @@ public:
         return framesToRead;
     }
 
+    void resize(std::size_t capacityFrames)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+
+        capacityFrames_ = capacityFrames;
+        buffer_.assign(capacityFrames_, 0.0f);
+
+        readFrame_ = 0;
+        writeFrame_ = 0;
+        availableFrames_ = 0;
+
+    }
+
 private:
     mutable std::mutex mutex_;
 

@@ -4,6 +4,7 @@
 #include "WasapiOutputSink.h"
 #include "AsioInputSource.h"
 #include "MonoRingBuffer.h"
+#include "DriverConfig.h"
 
 #include <windows.h>
 
@@ -83,12 +84,13 @@ private:
     long bufferSize_ = 128;
 
     ASIOCallbacks* callbacks_ = nullptr;
+    DriverConfig config_;
     std::vector<ASIOBufferInfo> bufferInfos_;
     std::vector<std::array<std::vector<float>, 2>> ownedBuffers_;
 
     std::atomic<bool> running_{false};
     std::thread callbackThread_;
-
+        
     std::atomic<unsigned long long> samplePosition_{0};
     std::atomic<float> outputPeak_{0.0f};
     StereoRingBuffer outputRing_{2048};

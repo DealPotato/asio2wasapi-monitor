@@ -21,6 +21,7 @@ internal sealed class MainForm : Form
     private NumericUpDown inputGainBox = null!;
     private CheckBox enableTestToneBox = null!;
 
+    private CheckBox wasapiExclusiveModeBox = null!;
     private CheckBox useDefaultWasapiBox = null!;
     private ComboBox preferredWasapiBox = null!;
     private NumericUpDown outputGainBox = null!;
@@ -184,6 +185,12 @@ internal sealed class MainForm : Form
             DropDownStyle = ComboBoxStyle.DropDown
         };
 
+        wasapiExclusiveModeBox = new CheckBox
+        {
+            Text = "Use WASAPI exclusive mode",
+            AutoSize = true
+        };
+        
         outputGainBox = CreateGainBox();
 
         useDefaultWasapiBox.CheckedChanged += (_, _) =>
@@ -198,6 +205,7 @@ internal sealed class MainForm : Form
         {
             new("", useDefaultWasapiBox),
             new("Preferred WASAPI Output Device", preferredWasapiBox),
+            new("", wasapiExclusiveModeBox),
             new("Output Gain", outputGainBox)
         });
     }
@@ -295,6 +303,7 @@ internal sealed class MainForm : Form
         preferredWasapiBox.Text = config.PreferredWasapiDevice;
         preferredWasapiBox.Enabled = !useDefaultWasapiBox.Checked;
         outputGainBox.Value = ToDecimal(config.OutputGain);
+        wasapiExclusiveModeBox.Checked = config.WasapiExclusiveMode;
 
         enableLoggingBox.Checked = config.EnableLogging;
     }
@@ -318,6 +327,7 @@ internal sealed class MainForm : Form
 
                 UseDefaultWasapiDevice = useDefaultWasapiBox.Checked,
                 PreferredWasapiDevice = preferredWasapiBox.Text.Trim(),
+                WasapiExclusiveMode = wasapiExclusiveModeBox.Checked,
                 OutputGain = (float)outputGainBox.Value,
 
                 EnableLogging = enableLoggingBox.Checked

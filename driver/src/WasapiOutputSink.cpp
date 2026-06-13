@@ -26,7 +26,11 @@ WasapiOutputSink::~WasapiOutputSink()
 bool WasapiOutputSink::start(
     StereoRingBuffer* ringBuffer,
     unsigned int sampleRate,
-    unsigned int bufferFrames)
+    unsigned int bufferFrames,
+    float outputGain,
+    bool useDefaultDevice,
+    const std::string& preferredDeviceName,
+    bool exclusiveMode)
 {
     debugLog("[ASIO2WASAPI] WASAPI output start requested\n");
 
@@ -49,17 +53,23 @@ bool WasapiOutputSink::start(
     }
 
     ringBuffer_ = ringBuffer;
+    outputGain_.store(outputGain);
+    useDefaultDevice_ = useDefaultDevice;
+    preferredDeviceName_ = preferredDeviceName;
+    exclusiveMode_ = exclusiveMode;
 
     try
     {
-        const unsigned int deviceId = audio_->getDefaultOutputDevice();
+        const unsigned int deviceId = findOutputDevice();
 
         if (deviceId == 0)
         {
-            lastError_ = "No default WASAPI output device.";
-            debugLog("[ASIO2WASAPI] WASAPI start failed: no default output device\n");
+            lastError_ = "No WASAPI output device found.";
+            debugLog("[ASIO2WASAPI] WASAPI start failed: no output device\n");
             return false;
         }
+
+        const auto info = audio_->getDeviceInfo(deviceId);
 
         RtAudio::StreamParameters outputParameters;
         outputParameters.deviceId = deviceId;
@@ -68,34 +78,81 @@ bool WasapiOutputSink::start(
 
         RtAudio::StreamOptions options;
         options.flags = RTAUDIO_MINIMIZE_LATENCY | RTAUDIO_SCHEDULE_REALTIME;
-        options.streamName = "ASIO2WASAPI Virtual ASIO Output";
+        options.streamName = "ASIO2WASAPI WASAPI Output";
 
-        audio_->openStream(
-            &outputParameters,
-            nullptr,
-            RTAUDIO_FLOAT32,
-            sampleRate,
-            &bufferFrames,
-            &WasapiOutputSink::audioCallback,
-            this,
-            &options);
+        if (exclusiveMode_)
+        {
+            options.flags |= RTAUDIO_HOG_DEVICE;
+        }
+
+        try
+        {
+            audio_->openStream(
+                &outputParameters,
+                nullptr,
+                RTAUDIO_FLOAT32,
+                sampleRate,
+                &bufferFrames,
+                &WasapiOutputSink::audioCallback,
+                this,
+                &options);
+        }
+        catch (const std::exception& e)
+        {
+            if (!exclusiveMode_)
+            {
+                throw;
+            }
+
+            char message[512] = {};
+            std::snprintf(
+                message,
+                sizeof(message),
+                "[ASIO2WASAPI] WASAPI exclusive mode failed, falling back to shared mode: %s\n",
+                e.what());
+
+            debugLog(message);
+
+            options.flags &= ~RTAUDIO_HOG_DEVICE;
+            exclusiveMode_ = false;
+
+            audio_->openStream(
+                &outputParameters,
+                nullptr,
+                RTAUDIO_FLOAT32,
+                sampleRate,
+                &bufferFrames,
+                &WasapiOutputSink::audioCallback,
+                this,
+                &options);
+        }
 
         audio_->startStream();
 
         running_ = true;
 
-        debugLog("[ASIO2WASAPI] WASAPI output started\n");
+        char message[512] = {};
+        std::snprintf(
+            message,
+            sizeof(message),
+            "[ASIO2WASAPI] WASAPI output started: device='%s' bufferFrames=%u exclusive=%s\n",
+            info.name.c_str(),
+            bufferFrames,
+            exclusiveMode_ ? "true" : "false");
+
+        debugLog(message);
+
         return true;
     }
     catch (const std::exception& e)
     {
         lastError_ = e.what();
 
-        char message[256] = {};
+        char message[512] = {};
         std::snprintf(
             message,
             sizeof(message),
-            "[ASIO2WASAPI] WASAPI start exception: %s\n",
+            "[ASIO2WASAPI] WASAPI output start exception: %s\n",
             lastError_.c_str());
 
         debugLog(message);
@@ -141,6 +198,71 @@ const std::string& WasapiOutputSink::lastError() const
     return lastError_;
 }
 
+unsigned int WasapiOutputSink::findOutputDevice() const
+{
+    if (!audio_)
+        return 0;
+
+    const unsigned int defaultDeviceId = audio_->getDefaultOutputDevice();
+
+    if (useDefaultDevice_ || preferredDeviceName_.empty())
+    {
+        return defaultDeviceId;
+    }
+
+    for (const auto deviceId : audio_->getDeviceIds())
+    {
+        try
+        {
+            const auto info = audio_->getDeviceInfo(deviceId);
+
+            if (info.outputChannels == 0)
+                continue;
+
+            char message[512] = {};
+            std::snprintf(
+                message,
+                sizeof(message),
+                "[ASIO2WASAPI] WASAPI output candidate: id=%u name='%s' outputs=%u\n",
+                deviceId,
+                info.name.c_str(),
+                info.outputChannels);
+
+            debugLog(message);
+
+            if (info.name.find(preferredDeviceName_) != std::string::npos)
+            {
+                std::snprintf(
+                    message,
+                    sizeof(message),
+                    "[ASIO2WASAPI] WASAPI output selected: id=%u name='%s'\n",
+                    deviceId,
+                    info.name.c_str());
+
+                debugLog(message);
+
+                return deviceId;
+            }
+        }
+        catch (const std::exception& e)
+        {
+            char message[512] = {};
+            std::snprintf(
+                message,
+                sizeof(message),
+                "[ASIO2WASAPI] WASAPI output probe failed: id=%u error='%s'\n",
+                deviceId,
+                e.what());
+
+            debugLog(message);
+        }
+    }
+
+    debugLog("[ASIO2WASAPI] Preferred WASAPI output was not found, falling back to default output\n");
+
+    return defaultDeviceId;
+}
+
 int WasapiOutputSink::audioCallback(
     void* outputBuffer,
     void* inputBuffer,
@@ -180,9 +302,11 @@ int WasapiOutputSink::render(
 
     ringBuffer_->readInterleaved(output, nBufferFrames);
 
+    const float outputGain = outputGain_.load();
+
     for (unsigned int i = 0; i < nBufferFrames * 2; ++i)
     {
-        output[i] = std::clamp(output[i], -1.0f, 1.0f);
+        output[i] = std::clamp(output[i] * outputGain, -1.0f, 1.0f);
     }
 
     return 0;
