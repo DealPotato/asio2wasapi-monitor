@@ -14,36 +14,6 @@ set(RTAUDIO_API_ASIO ON CACHE BOOL "" FORCE)
 
 add_subdirectory(external/rtaudio)
 
-# Standalone ASIO -> WASAPI monitor app
-add_executable(asio2wasapi-monitor
-    src/main.cpp
-    src/Config.cpp
-    src/DeviceList.cpp
-    src/AudioBridge.cpp
-)
-
-target_link_libraries(asio2wasapi-monitor
-    PRIVATE
-        rtaudio
-)
-
-target_include_directories(asio2wasapi-monitor
-    PRIVATE
-        src
-)
-
-target_compile_definitions(asio2wasapi-monitor
-    PRIVATE
-        WIN32_LEAN_AND_MEAN
-        NOMINMAX
-)
-
-# Copy rtaudio.dll next to our exe after every build
-add_custom_command(TARGET asio2wasapi-monitor POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        $<TARGET_FILE:rtaudio>
-        $<TARGET_FILE_DIR:asio2wasapi-monitor>
-)
 
 # Virtual ASIO driver DLL
 add_library(asio2wasapi-virtual-asio SHARED
@@ -78,7 +48,7 @@ target_link_libraries(asio2wasapi-virtual-asio
 )
 
 add_executable(asio2wasapi-devices
-    tools/device-list/main.cpp
+    apps/device-list/main.cpp
 )
 
 target_include_directories(asio2wasapi-devices PRIVATE
