@@ -562,7 +562,7 @@ void Asio2WasapiDriver::writeOutputToRing(long activeBuffer)
         if (info.channelNum == 1)
             right = static_cast<const float*>(info.buffers[activeBuffer]);
     }
-
+    
     if (!left || !right)
         return;
 

@@ -116,6 +116,19 @@ public:
         availableFrames_ = 0;
     }
     
+    void discardOldestFrames(std::size_t framesToDiscard)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+
+        if (framesToDiscard == 0 || availableFrames_ == 0)
+            return;
+
+        const std::size_t frames = std::min(framesToDiscard, availableFrames_);
+
+        readFrame_ = (readFrame_ + frames) % capacityFrames_;
+        availableFrames_ -= frames;
+    }
+
 private:
     mutable std::mutex mutex_;
 
