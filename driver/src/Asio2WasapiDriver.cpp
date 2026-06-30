@@ -8,9 +8,9 @@
 #include <cmath>
 #include <thread>
 #include <vector>
+#include <avrt.h>
 #include <filesystem>
 #include <shellapi.h>
-#include <windows.h>
 
 static void copyString(char* destination, const char* source, std::size_t maxLength)
 {
@@ -123,9 +123,7 @@ ASIOError Asio2WasapiDriver::start()
     }
 
     config_ = DriverConfig::load();
-
-    configWriteTime_ = DriverConfig::lastWriteTime();
-    lastConfigCheckCallback_ = 0;
+    setDebugLoggingEnabled(config_.enableLogging);
 
     enableTestInputTone_ = config_.enableTestTone;
 
@@ -135,19 +133,20 @@ ASIOError Asio2WasapiDriver::start()
     inputRing_.clear();
     outputRing_.clear();
 
-    const bool asioInputStarted = asioInput_.start(
-        &inputRing_,
-        static_cast<unsigned int>(sampleRate_),
-        static_cast<unsigned int>(bufferSize_),
-        config_.hardwareInputChannel,
-        config_.preferredAsioInputDevice);
-
-    if (!asioInputStarted)
+    if (!enableTestInputTone_)
     {
-        debugLog("[ASIO2WASAPI] warning: ASIO hardware input did not start\n");
-    }
+        const bool asioInputStarted = asioInput_.start(
+            &inputRing_,
+            static_cast<unsigned int>(sampleRate_),
+            static_cast<unsigned int>(bufferSize_),
+            config_.hardwareInputChannel,
+            config_.preferredAsioInputDevice);
 
-    const unsigned int wasapiBufferFrames = 256;
+        if (!asioInputStarted)
+        {
+            debugLog("[ASIO2WASAPI] warning: ASIO hardware input did not start\n");
+        }
+    }
 
     const bool wasapiStarted = wasapiOutput_.start(
         &outputRing_,
@@ -155,7 +154,8 @@ ASIOError Asio2WasapiDriver::start()
         config_.wasapiBufferFrames,
         config_.outputGain,
         config_.useDefaultWasapiDevice,
-        config_.preferredWasapiDevice);
+        config_.preferredWasapiDevice,
+        config_.wasapiExclusiveMode);
 
     if (!wasapiStarted)
     {
@@ -364,6 +364,7 @@ ASIOError Asio2WasapiDriver::createBuffers(
     callbacks_ = callbacks;
 
     bufferInfos_.assign(bufferInfos, bufferInfos + numChannels);
+    inputScratch_.assign(static_cast<std::size_t>(bufferSize_), 0.0f);
     ownedBuffers_.clear();
     ownedBuffers_.resize(static_cast<std::size_t>(numChannels));
 
@@ -450,7 +451,15 @@ void Asio2WasapiDriver::fillHardwareInputFromRing(long activeBuffer)
     if (activeBuffer < 0 || activeBuffer > 1)
         return;
 
-    inputScratch_.resize(static_cast<std::size_t>(bufferSize_));
+    if (inputScratch_.size() != static_cast<std::size_t>(bufferSize_))
+    {
+        inputScratch_.resize(static_cast<std::size_t>(bufferSize_));
+    }
+
+    std::fill(
+        inputScratch_.begin(),
+        inputScratch_.end(),
+        0.0f);
 
     inputRing_.read(
         inputScratch_.data(),
@@ -472,7 +481,7 @@ void Asio2WasapiDriver::fillHardwareInputFromRing(long activeBuffer)
             {
                 buffer[i] = inputScratch_[i] * config_.inputGain;
             }
-}
+        }
         else
         {
             std::fill(
@@ -480,13 +489,6 @@ void Asio2WasapiDriver::fillHardwareInputFromRing(long activeBuffer)
                 buffer + bufferSize_,
                 0.0f);
         }
-    }
-}
-
-namespace
-{
-    void driverModuleAnchor()
-    {
     }
 }
 
@@ -499,7 +501,7 @@ ASIOError Asio2WasapiDriver::controlPanel()
     GetModuleHandleExA(
         GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
             GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-        reinterpret_cast<LPCSTR>(&driverModuleAnchor),
+        reinterpret_cast<LPCSTR>(&copyString),
         &module);
 
     char modulePath[MAX_PATH] = {};
@@ -570,7 +572,7 @@ void Asio2WasapiDriver::writeOutputToRing(long activeBuffer)
         if (info.channelNum == 1)
             right = static_cast<const float*>(info.buffers[activeBuffer]);
     }
-
+    
     if (!left || !right)
         return;
 
@@ -586,10 +588,24 @@ void Asio2WasapiDriver::callbackLoop()
 
     auto nextWake = std::chrono::steady_clock::now();
 
+    DWORD mmcssTaskIndex = 0;
+
+    HANDLE mmcssHandle = AvSetMmThreadCharacteristicsA(
+        "Pro Audio",
+        &mmcssTaskIndex);
+
+    if (mmcssHandle)
+    {
+        AvSetMmThreadPriority(mmcssHandle, AVRT_PRIORITY_CRITICAL);
+        debugLog("[ASIO2WASAPI] Callback thread registered with MMCSS Pro Audio\n");
+    }
+    else
+    {
+        debugLog("[ASIO2WASAPI] Failed to register callback thread with MMCSS\n");
+    }
+
     while (running_.load(std::memory_order_acquire))
     {
-        reloadConfigIfChanged();
-
         if (callbacks_)
         {
             if (enableTestInputTone_)
@@ -629,6 +645,12 @@ void Asio2WasapiDriver::callbackLoop()
             bufferDuration);
 
         std::this_thread::sleep_until(nextWake);
+    }
+
+    if (mmcssHandle)
+    {
+        AvRevertMmThreadCharacteristics(mmcssHandle);
+        debugLog("[ASIO2WASAPI] Callback thread unregistered from MMCSS\n");
     }
 
     debugLog("[ASIO2WASAPI] callbackLoop exited\n");
@@ -706,117 +728,22 @@ float Asio2WasapiDriver::measureOutputPeak(long activeBuffer) const
 
 void Asio2WasapiDriver::debugPrintOutputPeak(float peak, unsigned long long callbackCount)
 {
+    if (!isDebugLoggingEnabled())
+        return;
+
     if ((callbackCount % 200) != 0)
         return;
 
-    char message[512] = {};
+    char message[160] = {};
 
     std::snprintf(
         message,
         sizeof(message),
-        "[ASIO2WASAPI] callback=%llu outputPeak=%f inputRingFrames=%zu outputRingFrames=%zu inputUnder=%llu inputDrop=%llu outputUnder=%llu outputDrop=%llu\n",
+        "[ASIO2WASAPI] callback=%llu outputPeak=%f inputRingFrames=%zu outputRingFrames=%zu\n",
         callbackCount,
         peak,
         inputRing_.availableFrames(),
-        outputRing_.availableFrames(),
-        static_cast<unsigned long long>(inputRing_.underrunFrames()),
-        static_cast<unsigned long long>(inputRing_.droppedFrames()),
-        static_cast<unsigned long long>(outputRing_.underrunFrames()),
-        static_cast<unsigned long long>(outputRing_.droppedFrames()));
+        outputRing_.availableFrames());
 
     debugLog(message);
-}
-
-void Asio2WasapiDriver::reloadConfigIfChanged()
-{
-    const unsigned long long currentCallback = callbackCount_.load();
-
-    if (currentCallback - lastConfigCheckCallback_ < 100)
-        return;
-
-    lastConfigCheckCallback_ = currentCallback;
-
-    const auto currentWriteTime = DriverConfig::lastWriteTime();
-
-    if (currentWriteTime == configWriteTime_)
-        return;
-
-    configWriteTime_ = currentWriteTime;
-
-    debugLog("[ASIO2WASAPI] Runtime config file changed, applying settings\n");
-
-    const DriverConfig newConfig = DriverConfig::load();
-
-    applyRuntimeConfig(newConfig);
-}
-
-void Asio2WasapiDriver::applyRuntimeConfig(const DriverConfig& newConfig)
-{
-    const bool inputNeedsRestart =
-        newConfig.preferredAsioInputDevice != config_.preferredAsioInputDevice ||
-        newConfig.hardwareInputChannel != config_.hardwareInputChannel ||
-        newConfig.inputRingFrames != config_.inputRingFrames ||
-        newConfig.enableTestTone != config_.enableTestTone;
-
-    const bool outputNeedsRestart =
-        newConfig.useDefaultWasapiDevice != config_.useDefaultWasapiDevice ||
-        newConfig.preferredWasapiDevice != config_.preferredWasapiDevice ||
-        newConfig.wasapiBufferFrames != config_.wasapiBufferFrames ||
-        newConfig.outputRingFrames != config_.outputRingFrames;
-
-    if (inputNeedsRestart)
-    {
-        debugLog("[ASIO2WASAPI] Restarting hardware ASIO input for runtime config\n");
-
-        asioInput_.stop();
-        inputRing_.resize(newConfig.inputRingFrames);
-        inputRing_.clear();
-    }
-
-    if (outputNeedsRestart)
-    {
-        debugLog("[ASIO2WASAPI] Restarting WASAPI output for runtime config\n");
-
-        wasapiOutput_.stop();
-        outputRing_.resize(newConfig.outputRingFrames);
-        outputRing_.clear();
-    }
-
-    config_ = newConfig;
-    enableTestInputTone_ = config_.enableTestTone;
-
-    wasapiOutput_.setOutputGain(config_.outputGain);
-
-    if (inputNeedsRestart && !enableTestInputTone_)
-    {
-        const bool asioInputStarted = asioInput_.start(
-            &inputRing_,
-            static_cast<unsigned int>(sampleRate_),
-            static_cast<unsigned int>(bufferSize_),
-            config_.hardwareInputChannel,
-            config_.preferredAsioInputDevice);
-
-        if (!asioInputStarted)
-        {
-            debugLog("[ASIO2WASAPI] Runtime hardware ASIO input restart failed\n");
-        }
-    }
-
-    if (outputNeedsRestart)
-    {
-        const bool wasapiStarted = wasapiOutput_.start(
-            &outputRing_,
-            static_cast<unsigned int>(sampleRate_),
-            config_.wasapiBufferFrames,
-            config_.outputGain,
-            config_.useDefaultWasapiDevice,
-            config_.preferredWasapiDevice);
-
-        if (!wasapiStarted)
-        {
-            debugLog("[ASIO2WASAPI] Runtime WASAPI output restart failed\n");
-        }
-    }
-
-    debugLog("[ASIO2WASAPI] Runtime config applied\n");
 }

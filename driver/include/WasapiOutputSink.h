@@ -20,13 +20,13 @@ public:
         unsigned int bufferFrames,
         float outputGain,
         bool useDefaultDevice,
-        const std::string& preferredDeviceName);
+        const std::string& preferredDeviceName,
+        bool exclusiveMode);
 
     void stop();
 
     bool isRunning() const;
     const std::string& lastError() const;
-    void setOutputGain(float outputGain);
 
 private:
     static int audioCallback(
@@ -47,9 +47,11 @@ private:
 
     bool running_ = false;
     std::string lastError_;
-    std::atomic<float> outputGain_{1.0f};
-    unsigned int findOutputDevice() const;
 
+    std::atomic<float> outputGain_{1.0f};
     bool useDefaultDevice_ = true;
     std::string preferredDeviceName_;
+        bool exclusiveMode_ = false;
+
+    unsigned int findOutputDevice() const;
 };

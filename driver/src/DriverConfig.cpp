@@ -6,7 +6,6 @@
 #include <cctype>
 #include <filesystem>
 #include <fstream>
-#include <sstream>
 #include <string>
 #include <unordered_map>
 
@@ -27,6 +26,7 @@ namespace
             &module);
 
         char path[MAX_PATH] = {};
+
         GetModuleFileNameA(module, path, MAX_PATH);
 
         return std::filesystem::path(path).parent_path();
@@ -63,9 +63,10 @@ namespace
         file
             << "[Audio]\n"
             << "sampleRate=48000\n"
-            << "wasapiBufferFrames=256\n"
-            << "inputRingFrames=2048\n"
-            << "outputRingFrames=2048\n"
+            << "asioBufferFrames=128\n"
+            << "wasapiBufferFrames=128\n"
+            << "inputRingFrames=1024\n"
+            << "outputRingFrames=1024\n"
             << "\n"
             << "[Input]\n"
             << "preferredAsioInputDevice=Focusrite\n"
@@ -77,10 +78,11 @@ namespace
             << "[Output]\n"
             << "useDefaultWasapiDevice=true\n"
             << "preferredWasapiDevice=\n"
+            << "wasapiExclusiveMode=true\n"
             << "outputGain=1.0\n"
             << "\n"
             << "[Debug]\n"
-            << "enableLogging=true\n";
+            << "enableLogging=false\n";
     }
 
     std::unordered_map<std::string, std::string> parseIni(
@@ -246,6 +248,7 @@ DriverConfig DriverConfig::load()
     const auto values = parseIni(path);
 
     config.sampleRate = getUInt(values, "Audio.sampleRate", config.sampleRate);
+    config.asioBufferFrames = getUInt(values, "Audio.asioBufferFrames", config.asioBufferFrames);
     config.wasapiBufferFrames = getUInt(values, "Audio.wasapiBufferFrames", config.wasapiBufferFrames);
     config.inputRingFrames = getUInt(values, "Audio.inputRingFrames", config.inputRingFrames);
     config.outputRingFrames = getUInt(values, "Audio.outputRingFrames", config.outputRingFrames);
@@ -257,6 +260,7 @@ DriverConfig DriverConfig::load()
 
     config.useDefaultWasapiDevice = getBool(values, "Output.useDefaultWasapiDevice", config.useDefaultWasapiDevice);
     config.preferredWasapiDevice = getString(values, "Output.preferredWasapiDevice", config.preferredWasapiDevice);
+    config.wasapiExclusiveMode = getBool(values, "Output.wasapiExclusiveMode", config.wasapiExclusiveMode);
     config.outputGain = getFloat(values, "Output.outputGain", config.outputGain);
 
     config.enableLogging = getBool(values, "Debug.enableLogging", config.enableLogging);

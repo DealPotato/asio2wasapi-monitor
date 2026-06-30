@@ -1,179 +1,66 @@
 # ASIO2WASAPI Monitor
 
-**ASIO2WASAPI Monitor** is an experimental Windows x64 virtual ASIO driver and control panel designed to route hardware ASIO input through an ASIO host/DAW and monitor the processed output through a WASAPI output device.
+Experimental Windows x64 virtual ASIO driver and control panel for routing a hardware ASIO input through a DAW/plugin host and monitoring the processed output through a WASAPI device.
 
-The main use case is:
-
-```text
-Guitar / instrument
-→ Hardware ASIO input device
-→ ASIO2WASAPI Virtual ASIO input
-→ DAW / plugin host / amp simulator
-→ ASIO2WASAPI Virtual ASIO output
-→ WASAPI headphones / speakers
-```
-
-This allows using an ASIO input device, such as a Focusrite Scarlett interface, while monitoring through a regular Windows audio output device.
-
-## Current Status
-
-This project is currently in an **experimental v0.1.0** stage.
-
-It is functional, but still early. The driver has been tested primarily with:
+Typical use case:
 
 ```text
-Windows 11 x64
-REAPER
-Focusrite USB ASIO
-WASAPI headphones
+Guitar -> Scarlett ASIO input -> ASIO2WASAPI Virtual ASIO -> REAPER / amp sim -> WASAPI headphones
 ```
 
-Other DAWs, audio interfaces, and WASAPI output devices may work, but are not guaranteed yet.
+> Status: experimental. Tested primarily on Windows 11 x64 with REAPER, Focusrite USB ASIO and WASAPI headphones.
 
-## Features
+## What is included
 
-* Virtual ASIO driver for Windows x64.
-* Hardware ASIO input capture.
-* WASAPI output monitoring.
-* ASIO host support through standard ASIO driver registration.
-* Control panel GUI.
-* Install and uninstall buttons inside the control panel.
-* Preferred ASIO input device selection.
-* Preferred WASAPI output device selection.
-* Input channel selection.
-* Runtime configuration through `asio2wasapi-monitor.ini`.
-* Live reload for most internal settings.
-* Input and output gain controls.
-* Adjustable WASAPI buffer size.
-* Adjustable input and output ring buffer sizes.
-* Test tone option.
-* Debug logging option.
-* ASIO Configuration button support from DAWs such as REAPER.
+- `asio2wasapi-virtual-asio.dll` - virtual ASIO driver.
+- `asio2wasapi-control.exe` - dark themed control panel for devices, presets and driver install/uninstall.
+- `asio2wasapi-devices.exe` - helper used by the control panel to list ASIO/WASAPI devices.
+- `rtaudio.dll` - RtAudio runtime dependency.
+- `asio2wasapi-monitor.ini` - runtime configuration next to the driver DLL.
 
-## Included Files
+## Current features
 
-A release package should contain:
+- Virtual ASIO driver visible to ASIO hosts.
+- Hardware ASIO input capture through RtAudio.
+- WASAPI output sink with shared/exclusive mode option.
+- MMCSS `Pro Audio` callback thread priority.
+- Device scanner for ASIO input and WASAPI output devices.
+- Control panel with latency presets:
+  - Safe
+  - Balanced
+  - Low Latency
+  - Experimental
+- Debug logging can be enabled only when needed; it is off by default for better realtime behavior.
 
-```text
-asio2wasapi-virtual-asio.dll
-rtaudio.dll
-asio2wasapi-control.exe
-asio2wasapi-devices.exe
-asio2wasapi-monitor.ini
-README.md
-LICENSE
-```
+## Quick start
 
-## Quick Start
+1. Build the runtime files:
 
-1. Extract the release ZIP to a permanent folder.
-
-   Example:
-
-   ```text
-   C:\Tools\asio2wasapi-monitor
+   ```powershell
+   cmake --build build-x64 --config Release --target install-local
    ```
 
-2. Run:
+2. Open the control panel:
 
-   ```text
-   asio2wasapi-control.exe
+   ```powershell
+   .\installed-driver\asio2wasapi-control.exe
    ```
 
-3. Click:
+3. Click **Install Driver**.
+4. Choose your hardware ASIO input device, input channel and WASAPI output device.
+5. Start with the **Balanced** preset.
+6. Save settings.
+7. In your DAW/plugin host, select **ASIO2WASAPI Virtual ASIO** as the ASIO driver.
 
-   ```text
-   Install Driver
-   ```
-
-   Administrator permission is required because the ASIO driver must be registered in the Windows Registry.
-
-4. Configure the driver:
-
-   Recommended starting settings:
-
-   ```text
-   Sample Rate: 48000
-   ASIO Buffer Frames: 128
-   WASAPI Buffer Frames: 256
-   Input Ring Frames: 2048
-   Output Ring Frames: 2048
-   Preferred ASIO Input Device: Focusrite
-   Hardware Input Channel: 1
-   Use Windows Default WASAPI Output Device: On
-   Input Gain: 1.00
-   Output Gain: 1.00
-   Enable Test Tone: Off
-   Enable Debug Logging: On
-   ```
-
-5. Open your DAW or ASIO host.
-
-6. Select:
-
-   ```text
-   ASIO2WASAPI Virtual ASIO
-   ```
-
-7. In the DAW, create an input-monitored track.
-
-   Example for REAPER:
-
-   ```text
-   Audio System: ASIO
-   ASIO Driver: ASIO2WASAPI Virtual ASIO
-   Track Input: Mono Input 1
-   Record Arm: On
-   Record Monitoring: On
-   ```
-
-8. Play your instrument and monitor the processed output through your selected WASAPI output device.
-
-## Control Panel
-
-The control panel can be opened directly:
-
-```text
-asio2wasapi-control.exe
-```
-
-It can also be opened from the DAW using:
-
-```text
-ASIO Configuration...
-```
-
-The control panel supports:
-
-```text
-Install Driver
-Uninstall Driver
-Save / Apply Live
-Reload
-Open Config Folder
-```
-
-Most internal settings are reloaded automatically by the running driver within a few seconds.
-
-Some host-controlled settings, such as sample rate and host ASIO buffer size, may still require reselecting the driver in the DAW.
-
-## Runtime Configuration
-
-The driver reads settings from:
-
-```text
-asio2wasapi-monitor.ini
-```
-
-Example configuration:
+## Recommended starting settings
 
 ```ini
 [Audio]
 sampleRate=48000
 asioBufferFrames=128
-wasapiBufferFrames=256
-inputRingFrames=2048
-outputRingFrames=2048
+wasapiBufferFrames=128
+inputRingFrames=1024
+outputRingFrames=1024
 
 [Input]
 preferredAsioInputDevice=Focusrite
@@ -184,254 +71,102 @@ enableTestTone=false
 [Output]
 useDefaultWasapiDevice=true
 preferredWasapiDevice=
+wasapiExclusiveMode=true
 outputGain=1.0
 
 [Debug]
-enableLogging=true
+enableLogging=false
 ```
 
-## Hardware Input Channel
+For a Scarlett with the guitar plugged into Input 2, use `hardwareInputChannel=1` because the value is zero-based.
 
-The hardware input channel is zero-based.
+## Latency notes
 
-Examples:
+The main latency cost is not C++ execution time. It comes from ASIO buffers, WASAPI buffers, ring-buffer safety depth, host/plugin processing and Windows scheduling.
 
-```text
-0 = Input 1
-1 = Input 2
-2 = Input 3
+The safest low-latency path is:
+
+1. Keep logging off while playing.
+2. Use WASAPI exclusive mode when the output device supports it.
+3. Start with `wasapiBufferFrames=128`, `inputRingFrames=1024`, `outputRingFrames=1024`.
+4. Try `outputRingFrames=768` only after the stable preset is clean.
+5. Avoid `512` output safety unless your system is completely stable.
+
+## Debug log
+
+Debug logging is intentionally disabled by default. Enable it in the control panel only while troubleshooting, then restart/reselect the ASIO driver in the host.
+
+The log file is written to:
+
+```powershell
+$env:TEMP\asio2wasapi-driver.log
 ```
 
-For example, if a guitar is connected to Input 2 on a Focusrite Scarlett interface, use:
-
-```ini
-hardwareInputChannel=1
-```
-
-## Latency Presets
-
-Recommended stable preset:
-
-```ini
-[Audio]
-sampleRate=48000
-asioBufferFrames=128
-wasapiBufferFrames=256
-inputRingFrames=2048
-outputRingFrames=2048
-```
-
-Low latency preset:
-
-```ini
-[Audio]
-sampleRate=48000
-asioBufferFrames=128
-wasapiBufferFrames=128
-inputRingFrames=1024
-outputRingFrames=1024
-```
-
-Ultra low latency experimental preset:
-
-```ini
-[Audio]
-sampleRate=48000
-asioBufferFrames=64
-wasapiBufferFrames=128
-inputRingFrames=512
-outputRingFrames=512
-```
-
-If audio crackles, drops out, or becomes unstable, increase the WASAPI buffer and ring buffer sizes.
-
-## Debug Log
-
-When debug logging is enabled, the driver writes logs to:
-
-```text
-%TEMP%\asio2wasapi-driver.log
-```
-
-Useful PowerShell command:
+Useful command:
 
 ```powershell
 Get-Content "$env:TEMP\asio2wasapi-driver.log" -Tail 120
 ```
 
-Useful log entries include:
+Live follow:
 
-```text
-ASIO input started
-WASAPI output started
-Runtime config file changed, applying settings
-Runtime config applied
-inputUnder
-inputDrop
-outputUnder
-outputDrop
+```powershell
+Get-Content "$env:TEMP\asio2wasapi-driver.log" -Wait -Tail 80
 ```
 
-If drop or underrun counters keep increasing, the selected latency settings may be too aggressive.
-
-## Build From Source
+## Build from source
 
 Requirements:
 
+- Windows x64
+- Visual Studio 2022 with C++ desktop workload
+- CMake 3.24+
+- .NET 8 SDK
+- RtAudio submodule/source present under `external/rtaudio`
+
+Configure and build:
+
+```powershell
+cmake -S . -B build-x64 -A x64
+cmake --build build-x64 --config Release --target install-local
+```
+
+The local runtime output is copied to:
+
 ```text
-Windows 10/11 x64
-Visual Studio 2022
-CMake
-.NET 8 SDK
-Git
-```
-
-Clone with submodules:
-
-```powershell
-git clone --recursive <repository-url>
-cd asio2wasapi-monitor
-```
-
-Configure x64 build:
-
-```powershell
-cmake -S . -B build-x64 -G "Visual Studio 17 2022" -A x64
-```
-
-Build C++ targets:
-
-```powershell
-cmake --build build-x64 --config Release
-```
-
-Build/publish the control panel:
-
-```powershell
-dotnet publish .\tools\Asio2Wasapi.ControlPanel -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
-```
-
-Copy runtime files:
-
-```powershell
-New-Item -ItemType Directory -Path .\installed-driver -Force | Out-Null
-
-Copy-Item ".\build-x64\Release\asio2wasapi-virtual-asio.dll" ".\installed-driver\" -Force
-Copy-Item ".\build-x64\external\rtaudio\Release\rtaudio.dll" ".\installed-driver\" -Force
-Copy-Item ".\build-x64\Release\asio2wasapi-devices.exe" ".\installed-driver\" -Force
-Copy-Item ".\tools\Asio2Wasapi.ControlPanel\bin\Release\net8.0-windows\win-x64\publish\asio2wasapi-control.exe" ".\installed-driver\" -Force
-```
-
-Then run:
-
-```powershell
-.\installed-driver\asio2wasapi-control.exe
-```
-
-## Manual Driver Registration
-
-The recommended method is to use the control panel.
-
-Manual registration can also be done with the included PowerShell script:
-
-```powershell
-Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
-
-.\scripts\register-driver.ps1 -DllPath "C:\Path\To\asio2wasapi-virtual-asio.dll"
-```
-
-Manual unregister:
-
-```powershell
-Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
-
-.\scripts\unregister-driver.ps1
+installed-driver/
 ```
 
 ## Troubleshooting
 
-### The driver does not appear in my DAW
+### The DLL will not copy during build
 
-Make sure the driver is installed using the control panel.
+Close the host and control panel first:
 
-Also confirm that the application is running as x64. This project currently targets Windows x64.
-
-### ASIO Configuration does not open the control panel
-
-Make sure this file is next to the driver DLL:
-
-```text
-asio2wasapi-control.exe
+```powershell
+taskkill /IM reaper.exe /F
+taskkill /IM asio2wasapi-control.exe /F
+taskkill /IM asio2wasapi-devices.exe /F
 ```
 
-The driver looks for the control panel in the same folder as:
+Then rebuild.
 
-```text
-asio2wasapi-virtual-asio.dll
-```
+### Crackles at low buffers
 
-### No sound
+Use the Balanced preset first. If 768 or 512 output safety buffers crackle, return to 1024. Clean monitoring is more important than an unusable lower number.
 
-Check:
+### Noise when using an amp sim
 
-```text
-The ASIO input device is correct.
-The hardware input channel is correct.
-Record monitoring is enabled in the DAW.
-The WASAPI output device is correct.
-Input Gain and Output Gain are not set to 0.
-Enable Test Tone is off for normal guitar/instrument use.
-```
+Bypass the amp sim first. High-gain amp sims can magnify guitar wiring, cable, grounding, inactive-input and gain-stage noise. Verify the guitar is silent with the volume at zero before blaming the driver.
 
-For Focusrite Scarlett Input 2, use:
+## Limitations
 
-```ini
-hardwareInputChannel=1
-```
-
-### Audio crackles or drops out
-
-Try increasing:
-
-```text
-WASAPI Buffer Frames
-Input Ring Frames
-Output Ring Frames
-```
-
-Recommended fallback:
-
-```ini
-wasapiBufferFrames=256
-inputRingFrames=2048
-outputRingFrames=2048
-```
-
-### Settings do not apply immediately
-
-Most internal settings reload live within a few seconds.
-
-However, some host-controlled settings may require reselecting the ASIO driver in the DAW:
-
-```text
-Sample rate
-Host ASIO buffer size
-```
-
-## Known Limitations
-
-* Experimental first release.
-* Windows x64 only.
-* Tested mainly with REAPER and Focusrite USB ASIO.
-* Some DAWs may behave differently.
-* Sample rate and host ASIO buffer handling may depend on the ASIO host.
-* No installer package yet.
-* Driver is not code-signed.
-* Device names are matched by text.
-* WASAPI exclusive/shared behavior may depend on the selected Windows device and system settings.
+- Windows x64 only.
+- Experimental virtual ASIO driver.
+- Configuration changes generally require reselecting/restarting the driver in the host.
+- The control panel does not yet display live driver metrics directly; log-based diagnostics are used for now.
+- Lower latency targets still need deeper work such as lock-free SPSC ring buffers and improved callback timing.
 
 ## License
 
-This project is licensed under the GPLv3 license.
-
-See `LICENSE` for details.
+GPLv3. See [LICENSE](LICENSE).

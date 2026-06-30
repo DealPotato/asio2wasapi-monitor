@@ -1,31 +1,34 @@
 #pragma once
 
-#include "DriverSettings.h"
+#include "DriverDefaults.h"
 
-#include <string>
 #include <filesystem>
+#include <string>
 
 struct DriverConfig
 {
-    unsigned int sampleRate = DriverSettings::DefaultSampleRate;
-    unsigned int wasapiBufferFrames = DriverSettings::WasapiBufferFrames;
+    unsigned int sampleRate = DriverDefaults::DefaultSampleRate;
+    unsigned int asioBufferFrames = DriverDefaults::AsioBufferFrames;
+    unsigned int wasapiBufferFrames = DriverDefaults::WasapiBufferFrames;
 
-    unsigned int inputRingFrames = DriverSettings::InputRingFrames;
-    unsigned int outputRingFrames = DriverSettings::OutputRingFrames;
+    unsigned int inputRingFrames = DriverDefaults::InputRingFrames;
+    unsigned int outputRingFrames = DriverDefaults::OutputRingFrames;
 
-    std::string preferredAsioInputDevice = DriverSettings::PreferredAsioInputName1;
-    unsigned int hardwareInputChannel = DriverSettings::HardwareInputChannel;
+    std::string preferredAsioInputDevice = DriverDefaults::PreferredAsioInputDevice;
+    unsigned int hardwareInputChannel = DriverDefaults::HardwareInputChannel;
 
-    float inputGain = 1.0f;
-    float outputGain = 1.0f;
-    bool useDefaultWasapiDevice = true;
-    std::string preferredWasapiDevice;
+    float inputGain = DriverDefaults::InputGain;
+    bool enableTestTone = DriverDefaults::EnableTestInputTone;
 
-    bool enableTestTone = DriverSettings::EnableTestInputTone;
-    bool enableLogging = DriverSettings::EnableDebugLogging;
+    bool useDefaultWasapiDevice = DriverDefaults::UseDefaultWasapiDevice;
+    std::string preferredWasapiDevice = DriverDefaults::PreferredWasapiDevice;
+    bool wasapiExclusiveMode = DriverDefaults::WasapiExclusiveMode;
+
+    float outputGain = DriverDefaults::OutputGain;
+
+    bool enableLogging = DriverDefaults::EnableDebugLogging;
 
     static DriverConfig load();
     static std::filesystem::path configPath();
     static std::filesystem::file_time_type lastWriteTime();
-    
 };

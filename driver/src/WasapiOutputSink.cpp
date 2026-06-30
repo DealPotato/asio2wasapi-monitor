@@ -29,7 +29,8 @@ bool WasapiOutputSink::start(
     unsigned int bufferFrames,
     float outputGain,
     bool useDefaultDevice,
-    const std::string& preferredDeviceName)
+    const std::string& preferredDeviceName,
+    bool exclusiveMode)
 {
     debugLog("[ASIO2WASAPI] WASAPI output start requested\n");
 
@@ -55,52 +56,103 @@ bool WasapiOutputSink::start(
     outputGain_.store(outputGain);
     useDefaultDevice_ = useDefaultDevice;
     preferredDeviceName_ = preferredDeviceName;
+    exclusiveMode_ = exclusiveMode;
+
     try
     {
-        const unsigned int deviceId = audio_->getDefaultOutputDevice();
+        const unsigned int deviceId = findOutputDevice();
 
         if (deviceId == 0)
         {
-            lastError_ = "No default WASAPI output device.";
-            debugLog("[ASIO2WASAPI] WASAPI start failed: no default output device\n");
+            lastError_ = "No WASAPI output device found.";
+            debugLog("[ASIO2WASAPI] WASAPI start failed: no output device\n");
             return false;
         }
 
+        const auto info = audio_->getDeviceInfo(deviceId);
+
         RtAudio::StreamParameters outputParameters;
-        outputParameters.deviceId = findOutputDevice();
+        outputParameters.deviceId = deviceId;
         outputParameters.nChannels = 2;
         outputParameters.firstChannel = 0;
 
         RtAudio::StreamOptions options;
         options.flags = RTAUDIO_MINIMIZE_LATENCY | RTAUDIO_SCHEDULE_REALTIME;
-        options.streamName = "ASIO2WASAPI Virtual ASIO Output";
+        options.streamName = "ASIO2WASAPI WASAPI Output";
 
-        audio_->openStream(
-            &outputParameters,
-            nullptr,
-            RTAUDIO_FLOAT32,
-            sampleRate,
-            &bufferFrames,
-            &WasapiOutputSink::audioCallback,
-            this,
-            &options);
+        if (exclusiveMode_)
+        {
+            options.flags |= RTAUDIO_HOG_DEVICE;
+        }
+
+        try
+        {
+            audio_->openStream(
+                &outputParameters,
+                nullptr,
+                RTAUDIO_FLOAT32,
+                sampleRate,
+                &bufferFrames,
+                &WasapiOutputSink::audioCallback,
+                this,
+                &options);
+        }
+        catch (const std::exception& e)
+        {
+            if (!exclusiveMode_)
+            {
+                throw;
+            }
+
+            char message[512] = {};
+            std::snprintf(
+                message,
+                sizeof(message),
+                "[ASIO2WASAPI] WASAPI exclusive mode failed, falling back to shared mode: %s\n",
+                e.what());
+
+            debugLog(message);
+
+            options.flags &= ~RTAUDIO_HOG_DEVICE;
+            exclusiveMode_ = false;
+
+            audio_->openStream(
+                &outputParameters,
+                nullptr,
+                RTAUDIO_FLOAT32,
+                sampleRate,
+                &bufferFrames,
+                &WasapiOutputSink::audioCallback,
+                this,
+                &options);
+        }
 
         audio_->startStream();
 
         running_ = true;
 
-        debugLog("[ASIO2WASAPI] WASAPI output started\n");
+        char message[512] = {};
+        std::snprintf(
+            message,
+            sizeof(message),
+            "[ASIO2WASAPI] WASAPI output started: device='%s' bufferFrames=%u exclusive=%s\n",
+            info.name.c_str(),
+            bufferFrames,
+            exclusiveMode_ ? "true" : "false");
+
+        debugLog(message);
+
         return true;
     }
     catch (const std::exception& e)
     {
         lastError_ = e.what();
 
-        char message[256] = {};
+        char message[512] = {};
         std::snprintf(
             message,
             sizeof(message),
-            "[ASIO2WASAPI] WASAPI start exception: %s\n",
+            "[ASIO2WASAPI] WASAPI output start exception: %s\n",
             lastError_.c_str());
 
         debugLog(message);
@@ -144,6 +196,71 @@ bool WasapiOutputSink::isRunning() const
 const std::string& WasapiOutputSink::lastError() const
 {
     return lastError_;
+}
+
+unsigned int WasapiOutputSink::findOutputDevice() const
+{
+    if (!audio_)
+        return 0;
+
+    const unsigned int defaultDeviceId = audio_->getDefaultOutputDevice();
+
+    if (useDefaultDevice_ || preferredDeviceName_.empty())
+    {
+        return defaultDeviceId;
+    }
+
+    for (const auto deviceId : audio_->getDeviceIds())
+    {
+        try
+        {
+            const auto info = audio_->getDeviceInfo(deviceId);
+
+            if (info.outputChannels == 0)
+                continue;
+
+            char message[512] = {};
+            std::snprintf(
+                message,
+                sizeof(message),
+                "[ASIO2WASAPI] WASAPI output candidate: id=%u name='%s' outputs=%u\n",
+                deviceId,
+                info.name.c_str(),
+                info.outputChannels);
+
+            debugLog(message);
+
+            if (info.name.find(preferredDeviceName_) != std::string::npos)
+            {
+                std::snprintf(
+                    message,
+                    sizeof(message),
+                    "[ASIO2WASAPI] WASAPI output selected: id=%u name='%s'\n",
+                    deviceId,
+                    info.name.c_str());
+
+                debugLog(message);
+
+                return deviceId;
+            }
+        }
+        catch (const std::exception& e)
+        {
+            char message[512] = {};
+            std::snprintf(
+                message,
+                sizeof(message),
+                "[ASIO2WASAPI] WASAPI output probe failed: id=%u error='%s'\n",
+                deviceId,
+                e.what());
+
+            debugLog(message);
+        }
+    }
+
+    debugLog("[ASIO2WASAPI] Preferred WASAPI output was not found, falling back to default output\n");
+
+    return defaultDeviceId;
 }
 
 int WasapiOutputSink::audioCallback(
@@ -193,43 +310,4 @@ int WasapiOutputSink::render(
     }
 
     return 0;
-}
-
-unsigned int WasapiOutputSink::findOutputDevice() const
-{
-    if (!audio_)
-        return 0;
-
-    if (useDefaultDevice_ || preferredDeviceName_.empty())
-    {
-        return audio_->getDefaultOutputDevice();
-    }
-
-    unsigned int fallbackDevice = audio_->getDefaultOutputDevice();
-
-    for (const auto deviceId : audio_->getDeviceIds())
-    {
-        try
-        {
-            const auto info = audio_->getDeviceInfo(deviceId);
-
-            if (info.outputChannels == 0)
-                continue;
-
-            if (info.name.find(preferredDeviceName_) != std::string::npos)
-            {
-                return deviceId;
-            }
-        }
-        catch (...)
-        {
-        }
-    }
-
-    return fallbackDevice;
-}
-
-void WasapiOutputSink::setOutputGain(float outputGain)
-{
-    outputGain_.store(outputGain);
 }
