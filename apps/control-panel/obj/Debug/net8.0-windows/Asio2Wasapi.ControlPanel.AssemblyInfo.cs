@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("asio2wasapi-control")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+db0563cd9c790c50b184d3cc6e8d8f7bf510711f")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+826c12b7f96b7ad777bfd2a27f4d6320930b5f92")]
 [assembly: System.Reflection.AssemblyProductAttribute("asio2wasapi-control")]
 [assembly: System.Reflection.AssemblyTitleAttribute("asio2wasapi-control")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

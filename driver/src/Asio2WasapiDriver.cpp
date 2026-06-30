@@ -123,6 +123,7 @@ ASIOError Asio2WasapiDriver::start()
     }
 
     config_ = DriverConfig::load();
+    setDebugLoggingEnabled(config_.enableLogging);
 
     enableTestInputTone_ = config_.enableTestTone;
 
@@ -363,6 +364,7 @@ ASIOError Asio2WasapiDriver::createBuffers(
     callbacks_ = callbacks;
 
     bufferInfos_.assign(bufferInfos, bufferInfos + numChannels);
+    inputScratch_.assign(static_cast<std::size_t>(bufferSize_), 0.0f);
     ownedBuffers_.clear();
     ownedBuffers_.resize(static_cast<std::size_t>(numChannels));
 
@@ -449,7 +451,15 @@ void Asio2WasapiDriver::fillHardwareInputFromRing(long activeBuffer)
     if (activeBuffer < 0 || activeBuffer > 1)
         return;
 
-    inputScratch_.resize(static_cast<std::size_t>(bufferSize_));
+    if (inputScratch_.size() != static_cast<std::size_t>(bufferSize_))
+    {
+        inputScratch_.resize(static_cast<std::size_t>(bufferSize_));
+    }
+
+    std::fill(
+        inputScratch_.begin(),
+        inputScratch_.end(),
+        0.0f);
 
     inputRing_.read(
         inputScratch_.data(),
@@ -467,10 +477,10 @@ void Asio2WasapiDriver::fillHardwareInputFromRing(long activeBuffer)
 
         if (info.channelNum == 0)
         {
-            std::copy(
-                inputScratch_.begin(),
-                inputScratch_.end(),
-                buffer);
+            for (std::size_t i = 0; i < inputScratch_.size(); ++i)
+            {
+                buffer[i] = inputScratch_[i] * config_.inputGain;
+            }
         }
         else
         {
@@ -718,6 +728,9 @@ float Asio2WasapiDriver::measureOutputPeak(long activeBuffer) const
 
 void Asio2WasapiDriver::debugPrintOutputPeak(float peak, unsigned long long callbackCount)
 {
+    if (!isDebugLoggingEnabled())
+        return;
+
     if ((callbackCount % 200) != 0)
         return;
 

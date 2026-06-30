@@ -200,7 +200,10 @@ int AsioInputSource::capture(
 
     const auto* input = static_cast<const float*>(inputBuffer);
 
-    captureScratch_.resize(nBufferFrames);
+    if (captureScratch_.size() < nBufferFrames)
+    {
+        captureScratch_.resize(nBufferFrames);
+    }
 
     for (unsigned int i = 0; i < nBufferFrames; ++i)
     {
@@ -218,7 +221,8 @@ unsigned int AsioInputSource::findInputDevice() const
     if (!audio_)
         return 0;
 
-    unsigned int fallbackDevice = 0;
+    unsigned int firstValidDevice = 0;
+    unsigned int focusriteFallback = 0;
 
     for (const auto deviceId : audio_->getDeviceIds())
     {
@@ -228,13 +232,13 @@ unsigned int AsioInputSource::findInputDevice() const
 
             if (info.inputChannels == 0)
                 continue;
-            
+
             if (info.name.find("ASIO2WASAPI") != std::string::npos)
             {
                 debugLog("[ASIO2WASAPI] ASIO input candidate skipped: self driver\n");
                 continue;
             }
-            
+
             char message[512] = {};
             std::snprintf(
                 message,
@@ -246,12 +250,28 @@ unsigned int AsioInputSource::findInputDevice() const
 
             debugLog(message);
 
-            if (fallbackDevice == 0)
-                fallbackDevice = deviceId;
+            if (firstValidDevice == 0)
+                firstValidDevice = deviceId;
 
-            if (info.name.find("Focusrite") != std::string::npos ||
-                info.name.find("Scarlett") != std::string::npos)
+            if (focusriteFallback == 0 &&
+                (info.name.find("Focusrite") != std::string::npos ||
+                 info.name.find("Scarlett") != std::string::npos))
             {
+                focusriteFallback = deviceId;
+            }
+
+            if (!preferredDeviceName_.empty() &&
+                info.name.find(preferredDeviceName_) != std::string::npos)
+            {
+                std::snprintf(
+                    message,
+                    sizeof(message),
+                    "[ASIO2WASAPI] ASIO input selected by preference: id=%u name='%s'\n",
+                    deviceId,
+                    info.name.c_str());
+
+                debugLog(message);
+
                 return deviceId;
             }
         }
@@ -269,5 +289,16 @@ unsigned int AsioInputSource::findInputDevice() const
         }
     }
 
-    return fallbackDevice;
+    if (focusriteFallback != 0)
+    {
+        debugLog("[ASIO2WASAPI] Preferred ASIO input was not found, using Focusrite/Scarlett fallback\n");
+        return focusriteFallback;
+    }
+
+    if (firstValidDevice != 0)
+    {
+        debugLog("[ASIO2WASAPI] Preferred ASIO input was not found, using first available ASIO input\n");
+    }
+
+    return firstValidDevice;
 }

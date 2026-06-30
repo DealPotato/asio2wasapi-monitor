@@ -2,8 +2,24 @@
 
 #include <windows.h>
 
+#include <atomic>
 #include <cstdio>
 #include <cstring>
+
+namespace
+{
+    std::atomic<bool> g_debugLoggingEnabled{false};
+}
+
+void setDebugLoggingEnabled(bool enabled)
+{
+    g_debugLoggingEnabled.store(enabled, std::memory_order_relaxed);
+}
+
+bool isDebugLoggingEnabled()
+{
+    return g_debugLoggingEnabled.load(std::memory_order_relaxed);
+}
 
 void debugLog(const char* message)
 {
@@ -11,6 +27,9 @@ void debugLog(const char* message)
         return;
 
     OutputDebugStringA(message);
+
+    if (!g_debugLoggingEnabled.load(std::memory_order_relaxed))
+        return;
 
     char path[MAX_PATH] = {};
     DWORD len = GetTempPathA(MAX_PATH, path);

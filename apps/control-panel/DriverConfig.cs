@@ -6,9 +6,9 @@ internal sealed class DriverConfig
 {
     public int SampleRate { get; set; } = 48000;
     public int AsioBufferFrames { get; set; } = 128;
-    public int WasapiBufferFrames { get; set; } = 256;
-    public int InputRingFrames { get; set; } = 2048;
-    public int OutputRingFrames { get; set; } = 2048;
+    public int WasapiBufferFrames { get; set; } = 128;
+    public int InputRingFrames { get; set; } = 1024;
+    public int OutputRingFrames { get; set; } = 1024;
 
     public string PreferredAsioInputDevice { get; set; } = "Focusrite";
     public int HardwareInputChannel { get; set; } = 1;
@@ -18,10 +18,10 @@ internal sealed class DriverConfig
     public bool UseDefaultWasapiDevice { get; set; } = true;
     public string PreferredWasapiDevice { get; set; } = "";
 
-    public bool WasapiExclusiveMode { get; set; } = false;
+    public bool WasapiExclusiveMode { get; set; } = true;
     public float OutputGain { get; set; } = 1.0f;
 
-    public bool EnableLogging { get; set; } = true;
+    public bool EnableLogging { get; set; } = false;
 
     public static DriverConfig Load(string path)
     {

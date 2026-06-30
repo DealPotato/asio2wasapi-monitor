@@ -75,3 +75,6 @@ Testing/
 *.user
 *.suo
 *.log
+# .NET build output
+apps/control-panel/bin/
+apps/control-panel/obj/

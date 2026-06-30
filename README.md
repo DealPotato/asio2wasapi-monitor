@@ -1,165 +1,172 @@
 # ASIO2WASAPI Monitor
 
-ASIO2WASAPI Monitor is an open-source Windows audio utility that routes low-latency ASIO input to a WASAPI output device.
+Experimental Windows x64 virtual ASIO driver and control panel for routing a hardware ASIO input through a DAW/plugin host and monitoring the processed output through a WASAPI device.
 
-The initial use case is direct guitar monitoring:
-
-```text
-Guitar → Audio Interface ASIO Input → ASIO2WASAPI Monitor → WASAPI Headphones
-```
-
-This allows an ASIO audio interface input, such as a Focusrite Scarlett guitar input, to be monitored through a separate Windows audio output device, such as USB or wireless headphones.
-
-## Current Status
-
-This project is currently in early MVP stage.
-
-Working features:
-
-- ASIO backend support
-- WASAPI backend support
-- ASIO input capture
-- WASAPI stereo output
-- Mono input to stereo output routing
-- Runtime configuration through command-line arguments
-- Smart prebuffer startup
-- Device listing mode
-- Input peak, ring buffer, underrun, and overrun monitoring
-
-Planned features:
-
-- Graphical user interface
-- Device selection by name
-- Presets for low-latency and stable monitoring
-- Better latency tuning
-- Optional gain and mute controls
-- Future research into virtual ASIO driver support for DAW integration
-
-## Example Setup
-
-Tested development chain:
+Typical use case:
 
 ```text
-Guitar
-  ↓
-Focusrite USB ASIO input
-  ↓
-ASIO2WASAPI Monitor
-  ↓
-Arctis 7+ WASAPI headphones
+Guitar -> Scarlett ASIO input -> ASIO2WASAPI Virtual ASIO -> REAPER / amp sim -> WASAPI headphones
 ```
 
-Example devices:
+> Status: experimental. Tested primarily on Windows 11 x64 with REAPER, Focusrite USB ASIO and WASAPI headphones.
 
-```text
-ASIO input:
-[130] Focusrite USB ASIO
+## What is included
 
-WASAPI output:
-[131] Headphones (3- Arctis 7+)
+- `asio2wasapi-virtual-asio.dll` - virtual ASIO driver.
+- `asio2wasapi-control.exe` - dark themed control panel for devices, presets and driver install/uninstall.
+- `asio2wasapi-devices.exe` - helper used by the control panel to list ASIO/WASAPI devices.
+- `rtaudio.dll` - RtAudio runtime dependency.
+- `asio2wasapi-monitor.ini` - runtime configuration next to the driver DLL.
+
+## Current features
+
+- Virtual ASIO driver visible to ASIO hosts.
+- Hardware ASIO input capture through RtAudio.
+- WASAPI output sink with shared/exclusive mode option.
+- MMCSS `Pro Audio` callback thread priority.
+- Device scanner for ASIO input and WASAPI output devices.
+- Control panel with latency presets:
+  - Safe
+  - Balanced
+  - Low Latency
+  - Experimental
+- Debug logging can be enabled only when needed; it is off by default for better realtime behavior.
+
+## Quick start
+
+1. Build the runtime files:
+
+   ```powershell
+   cmake --build build-x64 --config Release --target install-local
+   ```
+
+2. Open the control panel:
+
+   ```powershell
+   .\installed-driver\asio2wasapi-control.exe
+   ```
+
+3. Click **Install Driver**.
+4. Choose your hardware ASIO input device, input channel and WASAPI output device.
+5. Start with the **Balanced** preset.
+6. Save settings.
+7. In your DAW/plugin host, select **ASIO2WASAPI Virtual ASIO** as the ASIO driver.
+
+## Recommended starting settings
+
+```ini
+[Audio]
+sampleRate=48000
+asioBufferFrames=128
+wasapiBufferFrames=128
+inputRingFrames=1024
+outputRingFrames=1024
+
+[Input]
+preferredAsioInputDevice=Focusrite
+hardwareInputChannel=1
+inputGain=1.0
+enableTestTone=false
+
+[Output]
+useDefaultWasapiDevice=true
+preferredWasapiDevice=
+wasapiExclusiveMode=true
+outputGain=1.0
+
+[Debug]
+enableLogging=false
 ```
 
-Your device IDs may be different. Use `--list` to find the correct IDs on your system.
+For a Scarlett with the guitar plugged into Input 2, use `hardwareInputChannel=1` because the value is zero-based.
 
-## Usage
+## Latency notes
 
-List available ASIO and WASAPI devices:
+The main latency cost is not C++ execution time. It comes from ASIO buffers, WASAPI buffers, ring-buffer safety depth, host/plugin processing and Windows scheduling.
+
+The safest low-latency path is:
+
+1. Keep logging off while playing.
+2. Use WASAPI exclusive mode when the output device supports it.
+3. Start with `wasapiBufferFrames=128`, `inputRingFrames=1024`, `outputRingFrames=1024`.
+4. Try `outputRingFrames=768` only after the stable preset is clean.
+5. Avoid `512` output safety unless your system is completely stable.
+
+## Debug log
+
+Debug logging is intentionally disabled by default. Enable it in the control panel only while troubleshooting, then restart/reselect the ASIO driver in the host.
+
+The log file is written to:
 
 ```powershell
-.\asio2wasapi-monitor.exe --list
+$env:TEMP\asio2wasapi-driver.log
 ```
 
-Start the bridge:
+Useful command:
 
 ```powershell
-.\asio2wasapi-monitor.exe --asio 130 --wasapi 131 --channel 2 --buffer 64 --prebuffer 1 --gain 1.0
+Get-Content "$env:TEMP\asio2wasapi-driver.log" -Tail 120
 ```
 
-## Command-Line Options
+Live follow:
+
+```powershell
+Get-Content "$env:TEMP\asio2wasapi-driver.log" -Wait -Tail 80
+```
+
+## Build from source
+
+Requirements:
+
+- Windows x64
+- Visual Studio 2022 with C++ desktop workload
+- CMake 3.24+
+- .NET 8 SDK
+- RtAudio submodule/source present under `external/rtaudio`
+
+Configure and build:
+
+```powershell
+cmake -S . -B build-x64 -A x64
+cmake --build build-x64 --config Release --target install-local
+```
+
+The local runtime output is copied to:
 
 ```text
---list               List ASIO and WASAPI devices, then exit
---asio <id>          ASIO input device ID
---wasapi <id>        WASAPI output device ID
---channel <n>        ASIO input channel, 1-based
---rate <hz>          Sample rate
---buffer <frames>    Buffer size in frames
---prebuffer <ms>     Startup prebuffer in milliseconds
---gain <value>       Output gain
---ring <samples>     Ring buffer size in samples
---help               Show help
+installed-driver/
 ```
 
-## Low-Latency Example
+## Troubleshooting
+
+### The DLL will not copy during build
+
+Close the host and control panel first:
 
 ```powershell
-.\asio2wasapi-monitor.exe --asio 130 --wasapi 131 --channel 2 --buffer 64 --prebuffer 1 --gain 1.0
+taskkill /IM reaper.exe /F
+taskkill /IM asio2wasapi-control.exe /F
+taskkill /IM asio2wasapi-devices.exe /F
 ```
 
-If you hear crackles, dropouts, or underruns, try a safer setting:
+Then rebuild.
 
-```powershell
-.\asio2wasapi-monitor.exe --asio 130 --wasapi 131 --channel 2 --buffer 128 --prebuffer 2 --gain 1.0
-```
+### Crackles at low buffers
 
-## Notes on Latency
+Use the Balanced preset first. If 768 or 512 output safety buffers crackle, return to 1024. Clean monitoring is more important than an unusable lower number.
 
-Zero latency is not physically possible. The total perceived latency depends on:
+### Noise when using an amp sim
 
-- ASIO input buffer size
-- Ring buffer fill level
-- WASAPI output buffer size
-- Prebuffer setting
-- Output device latency
-- Wireless headset or USB audio latency
+Bypass the amp sim first. High-gain amp sims can magnify guitar wiring, cable, grounding, inactive-input and gain-stage noise. Verify the guitar is silent with the volume at zero before blaming the driver.
 
-Lower buffer and prebuffer values reduce latency but may increase the risk of underruns or audio glitches.
+## Limitations
 
-## DAW Integration
-
-The current version is a standalone monitor application.
-
-It does not yet appear as an ASIO driver inside DAWs.
-
-Future DAW support would require a virtual ASIO driver layer, separate from the current standalone bridge.
-
-Possible future architecture:
-
-```text
-DAW
-  ↓
-ASIO2WASAPI Virtual ASIO Driver
-  ↓
-ASIO2WASAPI Bridge/App
-  ↓
-WASAPI Output Device
-```
-
-This is planned as a research direction, not part of the current MVP.
-
-## Build
-
-This project uses CMake and RtAudio.
-
-Basic build flow:
-
-```powershell
-cmake -S . -B build
-cmake --build build --config Release
-```
-
-The executable will be generated under:
-
-```text
-build\Release\
-```
+- Windows x64 only.
+- Experimental virtual ASIO driver.
+- Configuration changes generally require reselecting/restarting the driver in the host.
+- The control panel does not yet display live driver metrics directly; log-based diagnostics are used for now.
+- Lower latency targets still need deeper work such as lock-free SPSC ring buffers and improved callback timing.
 
 ## License
 
-This project is licensed under the GNU General Public License v3.0.
-
-## Project Status
-
-ASIO2WASAPI Monitor is experimental software.
-
-It is currently intended for learning, testing, and open-source development.
+GPLv3. See [LICENSE](LICENSE).
